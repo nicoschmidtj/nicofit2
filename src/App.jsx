@@ -13,7 +13,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, 
 
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
-const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+// clamp eliminado si no se usa
 const fmtTime = (sec) => {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -183,7 +183,9 @@ const useBeep = () => {
       g.connect(ctx.destination);
       o.start();
       o.stop(ctx.currentTime + 0.26);
-    } catch {}
+    } catch (err) {
+      // noop: beep no soportado
+    }
   };
 };
 
@@ -197,7 +199,7 @@ const Button = ({ className = "", children, onClick, type = "button", disabled }
 const IconButton = ({ children, onClick, className = "", title }) => (
   <button aria-label={title} onClick={onClick} title={title} className={`p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition ${className}`}>{children}</button>
 );
-const Input = (props) => <input {...props} className={`w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 outline-none focus:ring-2 ring-zinc-300 dark:ring-zinc-600 ${props.className || ""}`} />;
+const Input = (props) => <input {...props} className={`w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 outline-none focus:ring-2 ring-zinc-300 dark:ring-zinc-600 ${props.className || ""}`} />;
 const Label = ({ children }) => <label className="text-sm text-zinc-600 dark:text-zinc-400">{children}</label>;
 
 // ---------- Tabs ----------
@@ -220,15 +222,18 @@ export default function App() {
   const [confirmFlash, setConfirmFlash] = useState(null); // { message, onConfirm }
   const [dateStr] = useState(() => new Date().toLocaleDateString());
   const lastActionRef = useRef({ exId: null, added: 0 });
+  const restoredRef = useRef(false);
   const beep = useBeep();
 
   useEffect(() => save(data), [data]);
-  // Autoguardado de sesión activa
+  // Autoguardado de sesión activa (restaurar solo una vez al montar)
   useEffect(()=>{
+    if (restoredRef.current) return;
     const raw = localStorage.getItem('nicofit_active');
-    if (raw && !activeSession) {
-      try { setActiveSession(JSON.parse(raw)); } catch {}
+    if (raw) {
+      try { setActiveSession(JSON.parse(raw)); } catch (err) { /* noop */ }
     }
+    restoredRef.current = true;
   },[]);
   useEffect(()=>{
     if (activeSession) localStorage.setItem('nicofit_active', JSON.stringify(activeSession));
@@ -282,7 +287,7 @@ export default function App() {
             }
           }; ensure();
         }
-      } catch {}
+      } catch (err) { /* noop */ }
       restDeadlineRef.current = null;
     }
     rafRef.current = requestAnimationFrame(loop);
@@ -379,9 +384,10 @@ export default function App() {
       for (const set of s.sets) {
         const key = set.exerciseId;
         const ex = routines.flatMap((r) => r.exercises).find((e) => e.id === key);
-        if (!ex) continue;
+        const exName = ex ? ex.name : (set.exerciseName || null);
+        if (!exName) continue;
         const date = s.dateISO.slice(0, 10);
-        const entry = { date, exerciseId: key, exercise: ex.name, volume: set.mode === "time" ? 0 : set.reps * set.weightKg, oneRM: set.mode === "time" ? 0 : epley1RM(set.weightKg, set.reps) };
+        const entry = { date, exerciseId: key, exercise: exName, volume: set.mode === "time" ? 0 : set.reps * set.weightKg, oneRM: set.mode === "time" ? 0 : epley1RM(set.weightKg, set.reps) };
         if (!map.has(key)) map.set(key, []);
         map.get(key).push(entry);
       }
@@ -529,6 +535,7 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
 
   const [perExerciseState, setPerExerciseState] = useState({});
   const [openTimerMenu, setOpenTimerMenu] = useState(false);
+  const [quickAdd, setQuickAdd] = useState({ name: "", sets: "1", reps: "", weight: "" });
 
   // shape: { [exId]: { sets: [{checked, reps, weight, rpe}], drop?: {reps, weight}, completed: bool } }
 
@@ -553,20 +560,7 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
   const hasActive = !!activeSession;
   const startSession = () => startStrength(routineId);
 
-  const lastSetMap = useMemo(()=>{
-    const m = new Map();
-    if (activeSession) for (const s of activeSession.sets||[]) m.set(s.exerciseId, s);
-    for (const ss of data.sessions||[]) for (const st of (ss.sets||[])) m.set(st.exerciseId, st);
-    return m;
-  }, [activeSession, data.sessions]);
-
-  const handleStartRest = (ex) => {
-    const options = [30, 60, 90];
-    const pick = prompt(`Descanso (segundos): ${options.join("/")}`, String(ex?.restSec || data.settings.defaultRestSec));
-    if (!pick) return;
-    const val = parseInt(pick, 10);
-    if (!Number.isNaN(val)) startRest(val);
-  };
+  
   const quickRest = (sec) => startRest(sec);
   const customRest = () => {
     const pick = prompt("Segundos de descanso", String(restSec || data.settings.defaultRestSec));
@@ -635,10 +629,39 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
     }
   };
 
+  const addAdhocExercise = () => {
+    if (!activeSession) return alert("Inicia la sesión primero");
+    const name = (quickAdd.name || "").trim();
+    if (!name) return alert("Nombre requerido");
+    const setsN = Math.max(1, parseInt(quickAdd.sets || "1", 10));
+    const repsN = Math.max(1, parseInt(quickAdd.reps || "10", 10));
+    const weightDisp = Math.max(0, parseFloat(quickAdd.weight || "0"));
+    const wkg = fromDisplayToKg(weightDisp, unit);
+
+    const exId = "adhoc-" + uid();
+    const newSets = Array.from({ length: setsN }).map(() => ({
+      id: uid(),
+      exerciseId: exId,
+      exerciseName: name,
+      mode: "reps",
+      reps: repsN,
+      weightKg: wkg,
+      rpe: 8,
+      rir: rpeToRir(8),
+      tempo: "controlado",
+      at: Date.now(),
+      adhoc: true,
+    }));
+
+    setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
+    setQuickAdd({ name: "", sets: "1", reps: "", weight: "" });
+    flashPR("Ejercicio extra agregado");
+  };
+
   return (
     <div className="space-y-4">
       {/* Sticky glass header with global timer + start/finish */}
-      <div className="sticky top-0 z-30 -mx-4 px-4 pt-2 pb-2 bg-white/70 dark:bg-zinc-950/50 backdrop-blur border-b border-zinc-200/60 dark:border-zinc-800 overflow-visible relative isolate">
+      <div className="sticky top-0 z-30 -mx-4 px-4 pt-2 pb-2 bg-white/70 dark:bg-zinc-950/50 backdrop-blur border-b border-zinc-200/60 dark:border-zinc-800 overflow-visible">
         <div className="max-w-md mx-auto flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[11px] text-zinc-500">Rutina</div>
@@ -649,7 +672,7 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
             <div className="relative">
               <Button onClick={() => setOpenTimerMenu((v) => !v)} className="text-xs px-3 py-1"><Clock size={14} className="inline mr-1" /> {fmtTime(restSec)}</Button>
               {openTimerMenu && (
-                <div className="absolute right-0 mt-2 p-2 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-lg z-50">
+                <div className="absolute right-0 mt-2 p-2 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-lg z-50 min-w-[220px]" onBlur={()=> setOpenTimerMenu(false)} tabIndex={0}>
                   <div className="grid grid-cols-4 gap-2">
                     <Button className="text-xs" onClick={() => { quickRest(30); setOpenTimerMenu(false); }}>30s</Button>
                     <Button className="text-xs" onClick={() => { quickRest(60); setOpenTimerMenu(false); }}>60s</Button>
@@ -662,21 +685,19 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
             {!hasActive ? (
               <Button onClick={startSession} className="text-xs px-3 py-1" aria-label="Iniciar sesión de fuerza"><Play size={14} className="inline mr-1" /> Iniciar</Button>
             ) : (
-              <Button onClick={finishStrength} className="text-xs px-3 py-1 bg-emerald-600 hover:opacity-90" aria-label="Finalizar sesión de fuerza"><Check size={14} className="inline mr-1" /> Finalizar</Button>
+              <div className="flex items-center gap-2">
+                <Button onClick={()=> { if (confirm('¿Cancelar sesión sin guardar?')) setActiveSession(null); }} className="text-xs px-3 py-1 bg-zinc-700/20 dark:bg-zinc-200/10">Cancelar</Button>
+                <Button onClick={finishStrength} className="text-xs px-3 py-1 bg-emerald-600 hover:opacity-90" aria-label="Finalizar sesión de fuerza"><Check size={14} className="inline mr-1" /> Finalizar</Button>
+              </div>
             )}
           </div>
         </div>
       </div>
 
       <Card className="p-4 mt-1">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold flex items-center gap-2"><Dumbbell size={18} /> Entrenamiento de fuerza</h2>
-          {!hasActive ? (
-            <Button onClick={startSession} className="text-sm"><Play size={16} className="inline mr-1" /> Iniciar</Button>
-          ) : (
-            <Button onClick={finishStrength} className="text-sm bg-emerald-600 hover:opacity-90"><Check size={16} className="inline mr-1" /> Finalizar</Button>
-          )}
-        </div>
+          <div className="mb-2">
+            <h2 className="text-lg font-semibold flex items-center gap-2"><Dumbbell size={18} /> Entrenamiento de fuerza</h2>
+          </div>
 
         {!hasActive && (
           <div className="grid grid-cols-1 gap-2">
@@ -699,62 +720,58 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
               const st = perExerciseState[ex.id] || { sets: [] };
               return (
                 <div key={ex.id} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium">{idx + 1}. {ex.name}</div>
-                      <div className="text-xs text-zinc-500">Objetivo: {ex.targetSets}×{ex.mode === "reps" ? (ex.targetRepsRange || ex.targetReps) : (ex.targetRepsRange || `${ex.targetTimeSec}s`)} · Tempo: {tempoSugerido(ex.category, ex.mode)} {ex.notes ? `· ${ex.notes}` : ""}</div>
-                    </div>
-                    <div className="flex items-center">
-                      {(() => { const last = lastSetMap.get(ex.id); const sug = nextSuggestion({ lastSet: last, ex, unit }); return (
-                        <div className="text-xs text-zinc-500 mr-2 flex items-center gap-1">
-                          <span>Sug.: {ex.mode==='reps' ? `${sug.reps} reps` : `${sug.reps}s`} · {sug.weight} {unit}</span>
-                          {sug.trend==='up' ? <span>↑</span> : sug.trend==='down' ? <span>↓</span> : <span>↔︎</span>}
-                          <button className="underline ml-1" onClick={()=>{
-                            setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map(s=>({...s, reps: ex.mode==='reps'?sug.reps:s.reps, weight: sug.weight}))}}));
-                          }}>Aplicar a todas</button>
-                        </div>
-                      ); })()}
-                       <IconButton onClick={() => handleStartRest(ex)} title="Abrir timer de descanso"><Clock size={16} /></IconButton>
+                  <div className="mb-1">
+                    <div className="text-base font-semibold leading-tight">{idx + 1}. {ex.name}</div>
+                    <div className="text-xs text-zinc-500">
+                      Objetivo: {ex.targetSets}×{ex.mode === "reps" ? (ex.targetRepsRange || ex.targetReps) : (ex.targetRepsRange || `${ex.targetTimeSec}s`)}
+                      {" · "}
+                      Sug.: {kgOrLb(ex.suggestedWeightKg || 0, unit)} {unit}
+                      {" · "}
+                      Tempo: {tempoSugerido(ex.category, ex.mode)}
+                      {ex.notes ? ` · ${ex.notes}` : ""}
                     </div>
                   </div>
 
                   {/* Filas por serie con checkbox */}
-                  <div className="mt-3 space-y-2">
-                    {st.sets.map((row, i) => (
-                      <div key={i} className="grid grid-cols-12 items-end gap-2">
-                        <div className="col-span-1 flex items-center justify-center">
-                          <input type="checkbox" checked={!!row.checked} onChange={(e) => setPerExerciseState((p) => ({ ...p, [ex.id]: { ...p[ex.id], sets: p[ex.id].sets.map((s, j) => j === i ? { ...s, checked: e.target.checked } : s) } }))} />
-                        </div>
-                        <div className="col-span-3">
-                          <Label>{ex.mode === "reps" ? "Reps" : "Seg"}</Label>
-                          <div className="flex items-center gap-1">
-                            <IconButton title="Disminuir repeticiones" className="!p-2 min-h-[44px] min-w-[44px] text-base" onClick={() => setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s, reps: Math.max(1, parseInt(s.reps||1)-1)}:s)}}))}>-</IconButton>
-                          <Input type="number" inputMode="numeric" pattern="[0-9]*" value={row.reps}
-                              onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s, reps: e.target.value}:s)}}))} />
-                            <IconButton title="Incrementar repeticiones" className="!p-2 min-h-[44px] min-w-[44px] text-base" onClick={() => setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s, reps: parseInt(s.reps||0)+1}:s)}}))}>+</IconButton>
+                      <div className="mt-3 space-y-2">
+                        {st.sets.map((row, i) => (
+                          <div key={i} className="grid grid-cols-12 items-end gap-2">
+                            <div className="col-span-1 flex items-center justify-center">
+                              <input type="checkbox" checked={!!row.checked}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,checked:e.target.checked}:s)}}))}
+                              />
+                            </div>
+
+                            <div className="col-span-3">
+                              <Label>{ex.mode === "reps" ? "Reps" : "Seg"}</Label>
+                              <Input type="number" inputMode="numeric" value={row.reps} className="text-base"
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,reps:e.target.value}:s)}}))}
+                              />
+                            </div>
+
+                            <div className="col-span-3">
+                              <Label>Peso ({unit})</Label>
+                              <Input type="number" inputMode="decimal" value={row.weight} className="text-base"
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,weight:e.target.value}:s)}}))}
+                              />
+                            </div>
+
+                            <div className="col-span-5">
+                              <Label>RPE</Label>
+                              <select
+                                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-base"
+                                value={row.rpe}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,rpe:parseFloat(e.target.value)}:s)}}))}
+                              >
+                                <option value={7}>RPE 7 (RIR 3)</option>
+                                <option value={8}>RPE 8 (RIR 2)</option>
+                                <option value={9}>RPE 9 (RIR 1)</option>
+                                <option value={10}>RPE 10 (0)</option>
+                              </select>
+                            </div>
                           </div>
-                        </div>
-                        <div className="col-span-3">
-                          <Label>Peso ({unit})</Label>
-                          <div className="flex items-center gap-1">
-                            <IconButton title="Disminuir peso" className="!p-2 min-h-[44px] min-w-[44px] text-base" onClick={() => setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s, weight: (parseFloat(s.weight||0)-2.5).toFixed(1)}:s)}}))}>-</IconButton>
-                            <Input type="number" inputMode="decimal" pattern="[0-9]*" value={row.weight}
-                              onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s, weight: e.target.value}:s)}}))} />
-                            <IconButton title="Incrementar peso" className="!p-2 min-h-[44px] min-w-[44px] text-base" onClick={() => setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s, weight: (parseFloat(s.weight||0)+2.5).toFixed(1)}:s)}}))}>+</IconButton>
-                          </div>
-                        </div>
-                        <div className="col-span-5">
-                          <Label>RPE (rápido)</Label>
-                          <select value={row.rpe} onChange={(e) => setPerExerciseState((p) => ({ ...p, [ex.id]: { ...p[ex.id], sets: p[ex.id].sets.map((s, j) => j === i ? { ...s, rpe: parseFloat(e.target.value) } : s) } }))} className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-                            <option value={7}>3+ reps más (RPE 7)</option>
-                            <option value={8}>2 reps más (RPE 8)</option>
-                            <option value={9}>1 rep más (RPE 9)</option>
-                            <option value={10}>Fallo / 0 reps (RPE 10)</option>
-                          </select>
-                        </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
 
                   {/* Drop set (si aplica) */}
                   {st.drop && (
@@ -779,7 +796,33 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
               );
             })}
 
-            <p className="text-[11px] text-zinc-500">Consejo: marca series y usa el relojito para descanso 30/60/90s 😉</p>
+            <p className="text-[11px] text-zinc-500">Consejo: marca series y usa el reloj de arriba para descanso 30/60/90s 😉</p>
+
+            <div className="mt-4 p-3 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-800/40">
+              <div className="font-medium mb-2">Ejercicio extra (solo hoy)</div>
+              <div className="grid grid-cols-12 gap-2 items-end">
+                <div className="col-span-6">
+                  <Label>Nombre</Label>
+                  <Input value={quickAdd.name} onChange={(e)=>setQuickAdd(q=>({...q, name:e.target.value}))} placeholder="p. ej., Curl banca Scott" />
+                </div>
+                <div className="col-span-2">
+                  <Label>Series</Label>
+                  <Input type="number" inputMode="numeric" value={quickAdd.sets} onChange={(e)=>setQuickAdd(q=>({...q, sets:e.target.value}))} />
+                </div>
+                <div className="col-span-2">
+                  <Label>Reps</Label>
+                  <Input type="number" inputMode="numeric" value={quickAdd.reps} onChange={(e)=>setQuickAdd(q=>({...q, reps:e.target.value}))} />
+                </div>
+                <div className="col-span-2">
+                  <Label>Peso ({unit})</Label>
+                  <Input type="number" inputMode="decimal" value={quickAdd.weight} onChange={(e)=>setQuickAdd(q=>({...q, weight:e.target.value}))} />
+                </div>
+              </div>
+              <div className="mt-2 flex justify-end">
+                <Button className="text-sm" onClick={addAdhocExercise}><Plus size={14} className="inline mr-1" /> Agregar a la sesión</Button>
+              </div>
+              <p className="text-[11px] text-zinc-500 mt-1">No modifica tus rutinas. Solo se registra en esta sesión.</p>
+            </div>
           </div>
         )}
       </Card>
@@ -826,8 +869,7 @@ function bestE1RMForExercise(activeSession, sessions, exerciseId) {
 // CardioForm eliminado
 
 function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addExercise, editExercise, deleteExercise, setData }) {
-  const [openId, setOpenId] = useState(routines[0]?.id || "");
-  useEffect(() => { if (!openId && routines[0]) setOpenId(routines[0].id); }, [routines, openId]);
+  const [openId, setOpenId] = useState("");
   const [editingExId, setEditingExId] = useState(null);
   const [draft, setDraft] = useState(null);
 
@@ -855,7 +897,7 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
             <div className="flex items-center gap-2">
               <IconButton onClick={() => renameRoutine(r.id)} title="Renombrar"><Edit3 size={16} /></IconButton>
               <IconButton onClick={() => deleteRoutine(r.id)} title="Eliminar"><Trash2 size={16} /></IconButton>
-              <IconButton onClick={() => setOpenId((id) => (id === r.id ? "" : r.id))} title="Ver">{openId === r.id ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</IconButton>
+              <IconButton onClick={() => setOpenId(prev => (prev === r.id ? "" : r.id))} title="Ver">{openId === r.id ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</IconButton>
             </div>
           </div>
 
@@ -1117,7 +1159,7 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
                   Volumen: {Math.round(s.totalVolume || 0)} kg·rep · {fmtTime(s.durationSec || 0)}{s.kcal ? ` · ${s.kcal} kcal` : ""}
                 </div>
               </div>
-              <IconButton onClick={() => deleteSession(s.id)} title="Eliminar"><Trash2 size={16} /></IconButton>
+              <IconButton onClick={() => deleteSession(s.id)} title="Eliminar sesión"><Trash2 size={16} /></IconButton>
             </div>
           ))}
         </div>
@@ -1172,14 +1214,14 @@ function SettingsTab({ data, setData }) {
         URL_?.revokeObjectURL?.(url);
         return;
       }
-    } catch {}
+    } catch (err) { /* noop */ }
 
     // Fallback 1: copy to clipboard
     try {
       navigator.clipboard?.writeText(json);
       alert("No se pudo descargar archivo. Copié el JSON al portapapeles.");
       return;
-    } catch {}
+    } catch (err) { /* noop */ }
 
     // Fallback 2: open in new tab for manual save
     try {
@@ -1189,7 +1231,7 @@ function SettingsTab({ data, setData }) {
         w.document.close();
         return;
       }
-    } catch {}
+    } catch (err) { /* noop */ }
 
     alert("Export no disponible en este entorno. Copia manual desde la consola.");
   };
