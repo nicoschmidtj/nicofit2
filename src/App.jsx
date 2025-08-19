@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
 
 // =====================================
 // NicoFit — single-file React app (v1.6)
@@ -27,30 +27,43 @@ const kgOrLb = (val, unit) => (unit === "lb" ? Math.round(val * 2.20462 * 10) / 
 const fromDisplayToKg = (val, unit) => (unit === "lb" ? Math.round((val / 2.20462) * 10) / 10 : val);
 const roundToNearest = (val, step = 1) => Math.round(val / step) * step;
 const rpeToRir = (rpe) => {
-  const x = parseFloat(rpe || 0);
+  const x = Math.round(parseFloat(rpe || 0));
   if (x >= 10) return 0;
-  if (x >= 9.5) return 0;
   if (x >= 9) return 1;
-  if (x >= 8.5) return 1;
   if (x >= 8) return 2;
-  if (x >= 7) return 3;
-  return 4;
+  return 3;
 };
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // Auto-progresión helpers
-const deltaFromRIR = (rir) => { if (rir <= 0) return +2.5; if (rir === 1) return +1.25; if (rir === 2) return +0.0; return -2.5; };
-const _nextSuggestion = ({ lastSet, ex, unit }) => {
-  if (!lastSet || ex.mode === 'time') return { reps: ex.targetReps, weight: kgOrLb(ex.suggestedWeightKg||0, unit), trend:'=' };
-  const rir = lastSet.rir ?? rpeToRir(lastSet.rpe ?? 8);
-  const delta = deltaFromRIR(rir); // kg
-  const baseW = lastSet.weightKg ?? fromDisplayToKg(lastSet.weight || 0, unit);
-  const baseReps = lastSet.reps || ex.targetReps || 10;
-  let reps = baseReps, weightKg = baseW;
-  if (delta > 0) { weightKg = baseW + delta; }
-  else if (delta < 0) { reps = Math.max(1, baseReps - 1); }
-  const trend = delta > 0 ? 'up' : delta < 0 ? 'down' : '=';
-  return { reps, weight: kgOrLb(weightKg, unit), trend };
+const LOAD_STEP_KG = 2.5;
+const parseRange = (ex) => {
+  if (ex.mode === 'time') return [ex.targetTimeSec || 0, ex.targetTimeSec || 0];
+  const str = ex.targetRepsRange || `${ex.targetReps || 0}`;
+  const nums = String(str).match(/\d+/g)?.map(n => parseInt(n,10)) || [];
+  if (nums.length === 0) return [ex.targetReps || 0, ex.targetReps || 0];
+  if (nums.length === 1) return [nums[0], nums[0]];
+  return [nums[0], nums[1]];
+};
+const calcNext = ({ last, ex, profile }) => {
+  if (!last || ex.mode === 'time') return {};
+  const [minReps, maxReps] = parseRange(ex);
+  const minW = profile?.minWeightKg || 0;
+  let weightKg = last.weightKg;
+  let reps = last.reps;
+  const rir = last.rir ?? rpeToRir(last.rpe || 8);
+  if (rir >= 3) {
+    weightKg = Math.max(minW, last.weightKg + LOAD_STEP_KG);
+  } else if (rir === 2) {
+    if (reps < maxReps) reps = reps + 1;
+  } else if (rir <= 0 || reps < minReps) {
+    if (last.weightKg - LOAD_STEP_KG >= minW) {
+      weightKg = Math.max(minW, last.weightKg - LOAD_STEP_KG);
+    } else {
+      reps = Math.max(1, reps - 1);
+    }
+  }
+  return { weightKg, reps };
 };
 
 // Mapeo de grupos musculares desde el nombre del ejercicio
@@ -63,6 +76,16 @@ const MUSCLE_FROM_NAME = (name='')=>{
   if (/(bíceps|curl)/.test(n)) return 'brazo';
   if (/(tríceps|overhead|barra)/.test(n)) return 'brazo';
   if (/(core|abs|plancha|rueda|paloff|woodchopper|elevación piernas)/.test(n)) return 'core';
+  return 'otros';
+};
+
+// Mapeo simple de implemento desde el nombre
+const IMPLEMENT_FROM_NAME = (name='')=>{
+  const n = String(name).toLowerCase();
+  if (/(mancuerna|dumbbell)/.test(n)) return 'mancuerna';
+  if (/(barra|barbell)/.test(n)) return 'barra';
+  if (/(polea|cable)/.test(n)) return 'polea';
+  if (/(máquina|maquina|machine)/.test(n)) return 'maquina';
   return 'otros';
 };
 
@@ -136,6 +159,7 @@ const DEFAULT_DATA = {
     },
   ],
   sessions: [], // strength + cardio
+  profileByExerciseId: {},
 };
 
 // ---------- Storage ----------
@@ -259,6 +283,18 @@ export default function App() {
     } else {
       setDark(data.settings.theme === "dark");
     }
+  }, [data.settings.theme]);
+
+  useEffect(() => {
+    const applyTheme = () => {
+      const root = document.documentElement;
+      const isDark = data.settings.theme === 'system'
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        : data.settings.theme === 'dark';
+      root.classList.toggle('dark', isDark);
+    };
+    document.addEventListener('visibilitychange', applyTheme);
+    return () => document.removeEventListener('visibilitychange', applyTheme);
   }, [data.settings.theme]);
 
   const routines = data.routines;
@@ -414,6 +450,7 @@ export default function App() {
         {tab === "today" && (
           <TodayTab
             data={data}
+            setData={setData}
             routines={routines}
             activeSession={activeSession}
             startStrength={startStrength}
@@ -517,11 +554,12 @@ function tempoSugerido(category, mode) {
   return "controlado";
 }
 
-function TodayTab({ data, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash }) {
+function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash }) {
   const [routineId, setRoutineId] = useState(routines[0]?.id || "");
   useEffect(() => { if (!routineId && routines[0]) setRoutineId(routines[0].id); }, [routines, routineId]);
   const routine = routines.find((r) => r.id === (activeSession?.routineId || routineId));
 
+  const [sessionExercises, setSessionExercises] = useState([]);
   const [perExerciseState, setPerExerciseState] = useState({});
   const [openTimerMenu, setOpenTimerMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState({ name: "", sets: "1", reps: "", weight: "" });
@@ -529,14 +567,26 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
   // shape: { [exId]: { sets: [{checked, reps, weight, rpe}], drop?: {reps, weight}, completed: bool } }
 
   useEffect(() => {
-    if (!routine) return;
+    if (activeSession && routine) {
+      setSessionExercises(routine.exercises.map(e => ({ ...e })));
+      setPerExerciseState({});
+    } else {
+      setSessionExercises([]);
+      setPerExerciseState({});
+    }
+  }, [activeSession, routine]);
+
+  useEffect(() => {
+    if (sessionExercises.length === 0) return;
     setPerExerciseState((prev) => {
       const copy = { ...prev };
-      for (const ex of routine.exercises) {
+      for (const ex of sessionExercises) {
         if (!copy[ex.id]) {
-          const baseWeight = kgOrLb(ex.suggestedWeightKg || 0, unit);
+          const prof = data.profileByExerciseId?.[ex.id];
+          const baseWeight = kgOrLb((prof?.next?.weightKg ?? (ex.suggestedWeightKg || 0)), unit);
+          const baseReps = ex.mode === "reps" ? (prof?.next?.reps ?? (ex.targetReps || 10)) : (ex.targetTimeSec || 45);
           copy[ex.id] = {
-            sets: Array.from({ length: ex.targetSets || 3 }).map(() => ({ checked: false, reps: ex.mode === "reps" ? ex.targetReps || 10 : ex.targetTimeSec || 45, weight: baseWeight, rpe: 8 })),
+            sets: Array.from({ length: ex.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
             drop: ex.notes?.toLowerCase().includes("drop") ? { reps: ex.mode === "reps" ? Math.ceil((ex.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
             completed: false,
           };
@@ -544,7 +594,7 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
       }
       return copy;
     });
-  }, [routine, unit]);
+  }, [sessionExercises, unit, data.profileByExerciseId]);
 
   const hasActive = !!activeSession;
   const startSession = () => startStrength(routineId);
@@ -558,11 +608,48 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
     if (!Number.isNaN(val)) startRest(val);
   };
 
+  const replaceExercise = (oldEx, newEx) => {
+    setSessionExercises((arr) => arr.map((e) => (e.id === oldEx.id ? { ...newEx } : e)));
+    setPerExerciseState((p) => {
+      const copy = { ...p };
+      delete copy[oldEx.id];
+      const prof = data.profileByExerciseId?.[newEx.id];
+      const baseWeight = kgOrLb((prof?.next?.weightKg ?? (newEx.suggestedWeightKg || 0)), unit);
+      const baseReps = newEx.mode === 'reps' ? (prof?.next?.reps ?? (newEx.targetReps || 10)) : (newEx.targetTimeSec || 45);
+      copy[newEx.id] = {
+        sets: Array.from({ length: newEx.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
+        drop: newEx.notes?.toLowerCase().includes('drop') ? { reps: newEx.mode === 'reps' ? Math.ceil((newEx.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
+        completed: false,
+      };
+      return copy;
+    });
+    setActiveSession((s) => s ? ({ ...s, sets: s.sets.filter((set) => set.exerciseId !== oldEx.id) }) : s);
+    lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
+    setPrFlash('Ejercicio reemplazado');
+    setTimeout(() => setPrFlash(''), 1000);
+  };
+
+  const viewAlternative = (ex) => {
+    const group = MUSCLE_FROM_NAME(ex.name);
+    const impl = IMPLEMENT_FROM_NAME(ex.name);
+    let candidates = routines.flatMap((r) => r.exercises).filter((e) => e.id !== ex.id && MUSCLE_FROM_NAME(e.name) === group);
+    const sameImpl = candidates.filter((e) => IMPLEMENT_FROM_NAME(e.name) === impl);
+    if (sameImpl.length >= 3) candidates = sameImpl;
+    if (candidates.length === 0) return alert('Sin alternativas disponibles');
+    const list = candidates.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+    const pick = prompt(`Alternativas:\n${list}\nNúmero?`);
+    const idx = parseInt(pick || '', 10) - 1;
+    if (!candidates[idx]) return;
+    const alt = { ...candidates[idx] };
+    replaceExercise(ex, alt);
+  };
+
   const registerExercise = (ex) => {
     if (!activeSession) return alert("Inicia la sesión primero");
     const st = perExerciseState[ex.id];
     if (!st) return;
     if (st.completed && !confirm("Ejercicio ya registrado. ¿Registrar nuevamente?")) return;
+    if (st.drop && st.sets.some((s) => !s.checked)) return alert("Completa todas las series base antes del drop-set");
     // push sets
     const newSets = [];
     st.sets.forEach((s) => {
@@ -607,6 +694,13 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
     }
 
     setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
+    const lastValid = [...newSets].reverse().find(s => !s.drop);
+    if (lastValid) {
+      const prevProf = data.profileByExerciseId?.[ex.id] || {};
+      const last = { weightKg: lastValid.weightKg, reps: lastValid.reps, rir: lastValid.rir, dateISO: todayISO(), setup: prevProf.last?.setup };
+      const next = calcNext({ last, ex, profile: prevProf });
+      setData(d => ({ ...d, profileByExerciseId: { ...d.profileByExerciseId, [ex.id]: { ...prevProf, last, next } } }));
+    }
     const wasCompleted = st.completed;
     lastActionRef.current = {
       exId: ex.id,
@@ -624,7 +718,7 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
 
     // Superserie/Triserie: aviso y descanso compartido implícito
     if (ex.groupId) {
-      const mates = routine.exercises.filter(e=> e.groupId===ex.groupId && e.id!==ex.id);
+      const mates = sessionExercises.filter(e=> e.groupId===ex.groupId && e.id!==ex.id);
       setTimeout(() => {
         setPrFlash(`Superserie: ahora ${mates[0]?.name || 'siguiente del grupo'}`);
         setTimeout(() => setPrFlash(''), 1000);
@@ -657,6 +751,7 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
     }));
 
     setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
+    lastActionRef.current = { exId, added: newSets.length, prevCompleted: false, undo: null };
     setQuickAdd({ name: "", sets: "1", reps: "", weight: "" });
     flashPR("Ejercicio extra agregado");
   };
@@ -722,8 +817,29 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
 
         {hasActive && routine && (
           <div className="mt-3 space-y-3">
-            {routine.exercises.map((ex, idx) => {
+            {sessionExercises.map((ex, idx) => {
               const st = perExerciseState[ex.id] || { sets: [] };
+              const prof = data.profileByExerciseId?.[ex.id];
+              let suggestion = "";
+              if (prof?.next && prof?.last) {
+                const deltaW = (prof.next.weightKg ?? prof.last.weightKg) - prof.last.weightKg;
+                if (Math.abs(deltaW) > 0.001) {
+                  suggestion = `${deltaW > 0 ? '↑' : '↓'} ${deltaW > 0 ? '+' : ''}${kgOrLb(Math.abs(deltaW), unit)} ${unit}`;
+                } else {
+                  const deltaR = (prof.next.reps ?? prof.last.reps) - prof.last.reps;
+                  if (deltaR !== 0) {
+                    suggestion = `↔︎ ${deltaR > 0 ? '+' : ''}${deltaR} rep${Math.abs(deltaR) === 1 ? '' : 's'}`;
+                  } else {
+                    suggestion = `↔︎ mantener`;
+                  }
+                }
+              }
+              const setupParts = [];
+              const setup = prof?.last?.setup || {};
+              if (setup.height > 0) setupParts.push(`Altura: ${setup.height}`);
+              if (setup.incline > 0) setupParts.push(`Inclinación: ${setup.incline}`);
+              if (setup.seat > 0) setupParts.push(`Asiento: ${setup.seat}`);
+              const setupText = setupParts.length ? ` · ${setupParts.join(' · ')}` : "";
               return (
                 <div key={ex.id} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
                   <div className="mb-1">
@@ -736,6 +852,9 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
                       Tempo: {tempoSugerido(ex.category, ex.mode)}
                       {ex.notes ? ` · ${ex.notes}` : ""}
                     </div>
+                    {suggestion && (
+                      <div className="text-xs text-zinc-500">Sugerencia: {suggestion}{setupText}</div>
+                    )}
                   </div>
 
                   {/* Filas por serie con checkbox */}
@@ -798,7 +917,10 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
 
                   {!st.completed && (
                   <div className="mt-3 flex items-center justify-between">
-                    <div className="text-xs text-zinc-500">Marca las series hechas y ajusta reps/peso si cambia</div>
+                    <div className="text-xs text-zinc-500">
+                      Marca las series hechas y ajusta reps/peso si cambia
+                      <Button className="ml-2 text-xs" onClick={() => viewAlternative(ex)}>Ver alternativa</Button>
+                    </div>
                     <Button onClick={() => registerExercise(ex)} className="text-sm">Registrar ejercicio</Button>
                   </div>
                   )}
@@ -1013,7 +1135,7 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
   const filteredSessions = useMemo(()=>{
     const since = Date.now() - days*24*3600*1000;
     return sessions.filter(s=> new Date(s.dateISO).getTime() >= since && s.type==='strength' && (routineFilter==='all' || s.routineId===routineFilter));
-  }, [sessions, range, routineFilter]);
+  }, [sessions, days, routineFilter]);
   const totalSesiones = filteredSessions.length;
   const volumen4Semanas = useMemo(()=> {
     const since = Date.now() - 28*24*3600*1000;
@@ -1053,20 +1175,9 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
 
   const chartData = (perExerciseHistory.get(exId) || []);
   const weekly8 = (weeklyVolume || []).slice(-(8));
-  const weeklyByGroup = useMemo(()=>{
-    const out = {};
-    for (const s of sessions.filter(x=>x.type==='strength' && (routineFilter==='all' || x.routineId===routineFilter))) {
-      const d = new Date(s.dateISO); const wk = `${d.getUTCFullYear()}-W${weekNumber(d)}`;
-      if (!out[wk]) out[wk] = { week: wk, pecho:0, espalda:0, pierna:0, hombro:0, brazo:0, core:0, otros:0 };
-      for (const st of s.sets||[]) {
-        if (st.mode==='time') continue;
-        const exName = (routines.flatMap(r=>r.exercises).find(e=> e.id===st.exerciseId)||{}).name || '';
-        const g = MUSCLE_FROM_NAME(exName);
-        out[wk][g] += st.weightKg*st.reps;
-      }
-    }
-    return Object.values(out).sort((a,b)=> a.week.localeCompare(b.week)).slice(-8);
-  }, [sessions, routines, routineFilter]);
+  const distrib = useMemo(()=> distributionPorGrupo(sessions, routines, days, routineFilter), [sessions, routines, days, routineFilter]);
+  const weeklyStack = useMemo(()=> volumenSemanalApilado(sessions, routines, Math.min(8, Math.ceil(days/7)), routineFilter), [sessions, routines, days, routineFilter]);
+  const prs = useMemo(()=> prsRecientes(sessions, routines, days, routineFilter), [sessions, routines, days, routineFilter]);
 
   return (
     <div className="space-y-4">
@@ -1086,7 +1197,7 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
           </select>
         </div>
         <div className="grid grid-cols-3 gap-2 mb-3">
-          <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Sesiones (30d)</div><div className="text-lg font-semibold">{totalSesiones}</div></Card>
+          <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Sesiones ({range}d)</div><div className="text-lg font-semibold">{totalSesiones}</div></Card>
           <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Volumen (4 sem)</div><div className="text-lg font-semibold">{Math.round(volumen4Semanas)} kg·rep</div></Card>
           <Card className="p-3 text-center"><div className="text-xs text-zinc-500">PRs (4 sem)</div><div className="text-lg font-semibold">{prsUltimas4}</div></Card>
         </div>
@@ -1100,12 +1211,33 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div className="h-44 mt-3">
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="text-lg font-semibold mb-2">Distribución por grupo</h2>
+        <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={weeklyByGroup}>
+            <PieChart>
+              <Pie data={distrib} dataKey="volume" nameKey="group" labelLine={false} label={({percent}) => `${Math.round(percent*100)}%`}>
+                {distrib.map((d) => (
+                  <Cell key={d.group} fill={GROUP_COLORS[d.group]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(v) => `${Math.round(v)} kg·rep`} />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="text-lg font-semibold mb-2">Volumen semanal por grupo</h2>
+        <div className="h-48">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={weeklyStack}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="week" hide />
-              <Tooltip />
+              <Tooltip formatter={(v) => `${Math.round(v)} kg·rep`} />
               <Legend />
               <Bar dataKey="pecho" fill={GROUP_COLORS.pecho} stackId="a" />
               <Bar dataKey="espalda" fill={GROUP_COLORS.espalda} stackId="a" />
@@ -1116,6 +1248,19 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
               <Bar dataKey="otros" fill={GROUP_COLORS.otros} stackId="a" />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="text-lg font-semibold mb-2">PRs recientes</h2>
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 divide-y">
+          {prs.map((pr) => (
+            <div key={pr.id} className="flex justify-between px-3 py-2 text-sm">
+              <span className="truncate">{pr.name}</span>
+              <span className="text-xs text-zinc-500">{pr.metric} · {new Date(pr.dateISO).toLocaleDateString()}</span>
+            </div>
+          ))}
+          {prs.length === 0 && <div className="px-3 py-2 text-sm text-zinc-500">Sin PRs.</div>}
         </div>
       </Card>
 
@@ -1390,11 +1535,96 @@ function computeWeeklyVolume(sessions) {
   return Object.entries(res).map(([week, volume]) => ({ week, volume: Math.round(volume) })).sort((a, b) => a.week.localeCompare(b.week));
 }
 
+// Distribución de volumen por grupo muscular en ventana de "days" días
+function distributionPorGrupo(sessions, routines, days = 30, routineId = 'all') {
+  const exGroup = new Map();
+  for (const r of routines) {
+    for (const ex of r.exercises) exGroup.set(ex.id, MUSCLE_FROM_NAME(ex.name));
+  }
+  const since = Date.now() - days * 24 * 3600 * 1000;
+  const res = { pecho: 0, espalda: 0, pierna: 0, hombro: 0, brazo: 0, core: 0, otros: 0 };
+  for (const s of sessions) {
+    if (s.type !== 'strength') continue;
+    if (routineId !== 'all' && s.routineId !== routineId) continue;
+    if (new Date(s.dateISO).getTime() < since) continue;
+    for (const st of s.sets || []) {
+      if (st.mode === 'time') continue;
+      const g = exGroup.get(st.exerciseId) || 'otros';
+      res[g] += (st.weightKg || 0) * (st.reps || 0);
+    }
+  }
+  return Object.entries(res).map(([group, volume]) => ({ group, volume }));
+}
+
+// Volumen semanal apilado por grupo muscular
+function volumenSemanalApilado(sessions, routines, weeks = 8, routineId = 'all') {
+  const exGroup = new Map();
+  for (const r of routines) {
+    for (const ex of r.exercises) exGroup.set(ex.id, MUSCLE_FROM_NAME(ex.name));
+  }
+  const since = Date.now() - weeks * 7 * 24 * 3600 * 1000;
+  const out = {};
+  for (const s of sessions) {
+    if (s.type !== 'strength') continue;
+    if (routineId !== 'all' && s.routineId !== routineId) continue;
+    const d = new Date(s.dateISO);
+    if (d.getTime() < since) continue;
+    const wk = `${d.getUTCFullYear()}-W${weekNumber(d)}`;
+    if (!out[wk]) out[wk] = { week: wk, pecho:0, espalda:0, pierna:0, hombro:0, brazo:0, core:0, otros:0 };
+    for (const st of s.sets || []) {
+      if (st.mode === 'time') continue;
+      const g = exGroup.get(st.exerciseId) || 'otros';
+      out[wk][g] += (st.weightKg || 0) * (st.reps || 0);
+    }
+  }
+  return Object.values(out).sort((a,b)=> a.week.localeCompare(b.week)).slice(-weeks);
+}
+
+// Lista de PRs recientes (e1RM, volumen, reps) en ventana de "days" días
+function prsRecientes(sessions, routines, days = 30, routineId = 'all') {
+  const exName = new Map();
+  for (const r of routines) {
+    for (const ex of r.exercises) exName.set(ex.id, ex.name);
+  }
+  const sorted = [...sessions]
+    .filter(s=> s.type==='strength' && (routineId==='all' || s.routineId===routineId))
+    .sort((a,b)=> new Date(a.dateISO) - new Date(b.dateISO));
+  const bestE1 = new Map();
+  const bestVol = new Map();
+  const bestReps = new Map();
+  const res = [];
+  const since = Date.now() - days * 24 * 3600 * 1000;
+  for (const s of sorted) {
+    const t = new Date(s.dateISO).getTime();
+    for (const st of s.sets || []) {
+      if (st.mode === 'time') continue;
+      const id = st.exerciseId;
+      const name = exName.get(id) || 'Ejercicio';
+      const vol = (st.weightKg || 0) * (st.reps || 0);
+      const e1 = epley1RM(st.weightKg, st.reps);
+      const reps = st.reps || 0;
+      if (e1 > (bestE1.get(id) || 0)) {
+        if (t >= since) res.push({ id: `${st.id}-e1`, name, metric: 'e1RM', dateISO: s.dateISO });
+        bestE1.set(id, e1);
+      }
+      if (vol > (bestVol.get(id) || 0)) {
+        if (t >= since) res.push({ id: `${st.id}-vol`, name, metric: 'volumen', dateISO: s.dateISO });
+        bestVol.set(id, vol);
+      }
+      if (reps > (bestReps.get(id) || 0)) {
+        if (t >= since) res.push({ id: `${st.id}-reps`, name, metric: '+reps', dateISO: s.dateISO });
+        bestReps.set(id, reps);
+      }
+    }
+  }
+  return res.sort((a,b)=> new Date(b.dateISO) - new Date(a.dateISO)).slice(0,5);
+}
+
 // ---------- Dev self-tests (console) ----------
 (function runDevTests(){
   try {
     console.assert(epley1RM(100, 1) === 100 + Math.round(100 * (1/30)), "epley1RM trivial");
-    console.assert(rpeToRir(10) === 0 && rpeToRir(9) === 1 && rpeToRir(8) === 2, "rpe→rir mapping");
+    console.assert(rpeToRir(10) === 0 && rpeToRir(9) === 1 && rpeToRir(8) === 2 && rpeToRir(7) === 3, "rpe→rir mapping");
     console.assert(weekNumber(new Date("2024-01-01")) >= 1, "week number");
     const wkEmpty = computeWeeklyVolume([]);
     console.assert(Array.isArray(wkEmpty) && wkEmpty.length === 0, "weeklyVolume empty");
