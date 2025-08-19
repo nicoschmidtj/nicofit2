@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
 import { migrateToTemplates } from "./lib/migrations.js";
+import { getTemplateRoutineName, suggestAlternativesByExerciseId, primaryGroup } from "./lib/repoAdapter.js";
+import { resolveExercise } from "./lib/exerciseResolver.js";
 
 // =====================================
 // NicoFit — single-file React app (v1.6)
@@ -92,7 +94,7 @@ const IMPLEMENT_FROM_NAME = (name='')=>{
 
 const GROUP_COLORS = { pecho:'#EF4444', espalda:'#3B82F6', pierna:'#10B981', hombro:'#F59E0B', brazo:'#8B5CF6', core:'#06B6D4', otros:'#9CA3AF' };
 
-// ---------- Default dataset (pre-cargada con Rutina 1) ----------
+// ---------- Default dataset ----------
 const DEFAULT_DATA = {
   version: 5,
   settings: {
@@ -102,67 +104,11 @@ const DEFAULT_DATA = {
     vibration: true,
     theme: "system", // system | light | dark
   },
-  routines: [
-    {
-      id: uid(),
-      name: "Rutina 1 — Nico",
-      exercises: [
-        { id: uid(), name: "Belt squat cuádriceps", category: "compuesto", mode: "reps", targetSets: 2, targetReps: 8, targetRepsRange: "6–8", suggestedWeightKg: 160, restSec: 120, notes: "" },
-        { id: uid(), name: "Belt squat glúteos", category: "compuesto", mode: "reps", targetSets: 2, targetReps: 8, targetRepsRange: "6–8", suggestedWeightKg: 160, restSec: 120, notes: "" },
-        { id: uid(), name: "Peso muerto sumo", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 8, targetRepsRange: "6–8", suggestedWeightKg: 60, restSec: 150, notes: "" },
-        { id: uid(), name: "Press banca barra", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 10, targetRepsRange: "6–10", suggestedWeightKg: 60, restSec: 120, notes: "" },
-        { id: uid(), name: "Low seat row (agarre horizontal)", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 70, restSec: 90, notes: "" },
-        { id: uid(), name: "Vuelo lateral mancuernas (lateral)", category: "aislado", mode: "reps", targetSets: 2, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 8, restSec: 60, notes: "" },
-        { id: uid(), name: "Vuelo lateral mancuernas (frontal)", category: "aislado", mode: "reps", targetSets: 1, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 6, restSec: 60, notes: "" },
-        { id: uid(), name: "Curl bíceps martillo silla 60° (+ drop)", category: "aislado", mode: "reps", targetSets: 3, targetReps: 15, targetRepsRange: "12–15 (2+1D)", suggestedWeightKg: 10, restSec: 60, notes: "Drop set" },
-        { id: uid(), name: "Curl bíceps concentrado silla (+ drop)", category: "aislado", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "10–12 (2+1D)", suggestedWeightKg: 8, restSec: 60, notes: "Drop set" },
-        { id: uid(), name: "Patada tríceps polea una mano", category: "aislado", mode: "reps", targetSets: 3, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 10, restSec: 60, notes: "" },
-        { id: uid(), name: "Plancha frontal", category: "core", mode: "time", targetSets: 3, targetTimeSec: 45, targetRepsRange: "45s", suggestedWeightKg: 0, restSec: 45, notes: "Corporal" },
-        { id: uid(), name: "Rueda Abs", category: "core", mode: "reps", targetSets: 3, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 0, restSec: 45, notes: "Corporal" },
-      ],
-    },
-    {
-      id: uid(),
-      name: "Rutina 2 — Nico",
-      exercises: [
-        { id: uid(), name: "Zancada con mancuerna", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 20, restSec: 90, notes: "" },
-        { id: uid(), name: "Bíceps concentrado banca Scott (altura 5)", category: "aislado", mode: "reps", targetSets: 3, targetReps: 8, targetRepsRange: "6–8", suggestedWeightKg: 25, restSec: 60, notes: "altura 5" },
-        { id: uid(), name: "Press inclinado banca (máquina)", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 8, targetRepsRange: "6–8", suggestedWeightKg: 40, restSec: 90, notes: "alternativa 50" },
-        { id: uid(), name: "Remo polea baja V-Handle", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 60, restSec: 90, notes: "" },
-        { id: uid(), name: "Face Pulls", category: "aislado", mode: "reps", targetSets: 2, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 30, restSec: 60, notes: "" },
-        { id: uid(), name: "Rear Delt", category: "aislado", mode: "reps", targetSets: 2, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 5, restSec: 60, notes: "" },
-        { id: uid(), name: "Seated calf", category: "aislado", mode: "reps", targetSets: 4, targetReps: 20, targetRepsRange: "15–20", suggestedWeightKg: 50, restSec: 60, notes: "3–4 series" },
-        { id: uid(), name: "Tríceps polea barra (altura 32)", category: "aislado", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 30, restSec: 60, notes: "altura 32" },
-        { id: uid(), name: "Abductores", category: "aislado", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "10–12", suggestedWeightKg: 120, restSec: 60, notes: "2–3 series" },
-        { id: uid(), name: "Paloff Press", category: "core", mode: "reps", targetSets: 3, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 20, restSec: 45, notes: "" },
-        { id: uid(), name: "Fondo con elevación piernas", category: "core", mode: "reps", targetSets: 3, targetReps: 20, targetRepsRange: "20", suggestedWeightKg: 0, restSec: 60, notes: "Corporal" },
-      ],
-    },
-    {
-      id: uid(),
-      name: "Rutina 3 — Nico",
-      exercises: [
-        { id: uid(), name: "Press de Piernas (glúteo)", category: "compuesto", mode: "reps", targetSets: 2, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 180, restSec: 120, notes: "" },
-        { id: uid(), name: "Press de Piernas (cuádriceps)", category: "compuesto", mode: "reps", targetSets: 2, targetReps: 10, targetRepsRange: "6–10", suggestedWeightKg: 180, restSec: 120, notes: "" },
-        { id: uid(), name: "Rear kick", category: "aislado", mode: "reps", targetSets: 2, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 60, restSec: 60, notes: "" },
-        { id: uid(), name: "Pull Ups Jalon neutro / libre", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 60, restSec: 90, notes: "" },
-        { id: uid(), name: "Press Militar con mancuernas", category: "compuesto", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 18, restSec: 90, notes: "" },
-        { id: uid(), name: "Tríceps overhead", category: "aislado", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "10–12", suggestedWeightKg: 27.5, restSec: 60, notes: "drop set · altura 25" },
-        { id: uid(), name: "Bíceps inclinado en polea", category: "aislado", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 12.5, restSec: 60, notes: "altura 7" },
-        { id: uid(), name: "Press pecho polea", category: "compuesto", mode: "reps", targetSets: 2, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 17.5, restSec: 60, notes: "altura 24" },
-        { id: uid(), name: "Cruce cable polea", category: "aislado", mode: "reps", targetSets: 2, targetReps: 15, targetRepsRange: "12–15", suggestedWeightKg: 3.75, restSec: 60, notes: "altura 1" },
-        { id: uid(), name: "Curl antebrazo barra", category: "aislado", mode: "reps", targetSets: 4, targetReps: 20, targetRepsRange: "15–20", suggestedWeightKg: 15, restSec: 45, notes: "" },
-        { id: uid(), name: "Curl antebrazo mancuerna", category: "aislado", mode: "reps", targetSets: 4, targetReps: 20, targetRepsRange: "15–20", suggestedWeightKg: 16, restSec: 45, notes: "" },
-        { id: uid(), name: "Apertura pecho", category: "aislado", mode: "reps", targetSets: 2, targetReps: 12, targetRepsRange: "8–12", suggestedWeightKg: 16, restSec: 60, notes: "" },
-        { id: uid(), name: "Woodchopper", category: "core", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "10–12", suggestedWeightKg: 20, restSec: 45, notes: "altura 20" },
-        { id: uid(), name: "Elevación piernas con tensión", category: "core", mode: "reps", targetSets: 3, targetReps: 12, targetRepsRange: "10–12", suggestedWeightKg: 30, restSec: 45, notes: "" },
-      ],
-    },
-  ],
   sessions: [], // strength + cardio
   profileByExerciseId: {},
   userRoutinesIndex: {},
   customExercisesById: {},
+  customRoutineNames: {},
 };
 
 // ---------- Storage ----------
@@ -171,18 +117,8 @@ const loadFromLS = () => {
   try {
     const raw = localStorage.getItem(LS_KEY);
     const parsed = raw ? JSON.parse(raw) : DEFAULT_DATA;
-    // Merge defaults: añade rutinas por nombre si no existen aún
-    const byName = new Set((parsed.routines || []).map((r) => r.name));
-    const mergedRoutines = [
-      ...(parsed.routines || []),
-      ...DEFAULT_DATA.routines.filter((r) => !byName.has(r.name)),
-    ];
-    return {
-      ...DEFAULT_DATA,
-      ...parsed,
-      version: Math.max(DEFAULT_DATA.version, parsed.version || 0),
-      routines: mergedRoutines,
-    };
+    const migrated = migrateToTemplates(parsed);
+    return { ...DEFAULT_DATA, ...migrated };
   } catch (e) {
     console.warn("Load failed, using defaults", e);
     return DEFAULT_DATA;
@@ -303,7 +239,14 @@ const [data, setData] = useState(() => {
     return () => document.removeEventListener('visibilitychange', applyTheme);
   }, [data.settings.theme]);
 
-  const routines = data.routines;
+  const routines = useMemo(() => {
+    const idx = data.userRoutinesIndex || {};
+    return Object.keys(idx).map(key => ({
+      id: key,
+      name: data.customRoutineNames?.[key] || getTemplateRoutineName(key),
+      exercises: (idx[key] || []).map(id => resolveExercise(id, data.customExercisesById)).filter(Boolean),
+    }));
+  }, [data.userRoutinesIndex, data.customExercisesById, data.customRoutineNames]);
   const sessions = data.sessions;
 
   const loop = () => {
@@ -381,32 +324,73 @@ const [data, setData] = useState(() => {
     if (routines.length >= 7) return alert("Límite: 7 rutinas");
     const name = prompt("Nombre de la rutina");
     if (!name) return;
-    setData((d) => ({ ...d, routines: [...d.routines, { id: uid(), name, exercises: [] }] }));
+    const key = "custom/" + uid();
+    setData(d => ({
+      ...d,
+      userRoutinesIndex: { ...(d.userRoutinesIndex || {}), [key]: [] },
+      customRoutineNames: { ...(d.customRoutineNames || {}), [key]: name }
+    }));
   };
-  const deleteRoutine = (id) => { if (!confirm("¿Eliminar rutina?")) return; setData((d) => ({ ...d, routines: d.routines.filter((r) => r.id !== id) })); };
-  const renameRoutine = (id) => { const name = prompt("Nuevo nombre"); if (!name) return; setData((d) => ({ ...d, routines: d.routines.map((r) => (r.id === id ? { ...r, name } : r)) })); };
+  const deleteRoutine = (id) => {
+    if (!confirm("¿Eliminar rutina?")) return;
+    setData(d => {
+      const idx = { ...(d.userRoutinesIndex || {}) };
+      delete idx[id];
+      const names = { ...(d.customRoutineNames || {}) };
+      delete names[id];
+      return { ...d, userRoutinesIndex: idx, customRoutineNames: names };
+    });
+  };
+  const renameRoutine = (id) => {
+    const name = prompt("Nuevo nombre");
+    if (!name) return;
+    setData(d => ({
+      ...d,
+      customRoutineNames: { ...(d.customRoutineNames || {}), [id]: name }
+    }));
+  };
 
   const addExercise = (routineId) => {
-    const r = routines.find((x) => x.id === routineId);
-    if (!r) return;
-    if (r.exercises.length >= 12) return alert("Límite: 12 ejercicios por rutina");
+    const arr = data.userRoutinesIndex?.[routineId] || [];
+    if (arr.length >= 12) return alert("Límite: 12 ejercicios por rutina");
     const name = prompt("Nombre del ejercicio");
     if (!name) return;
     const mode = (prompt("Modo (reps/time)", "reps") || "reps").toLowerCase() === "time" ? "time" : "reps";
     const category = (prompt("Categoría (compuesto/aislado/core)", "compuesto") || "compuesto").toLowerCase();
     const targetSets = parseInt(prompt("Series objetivo") || "3", 10);
-    let targetReps = 10; let targetTimeSec = 45;
-    if (mode === "reps") targetReps = parseInt(prompt("Reps objetivo por serie") || "10", 10);
-    else targetTimeSec = parseInt(prompt("Segundos por serie") || "45", 10);
-    const targetRepsRange = prompt("Rango reps/tiempo a mostrar (opcional)", mode === "reps" ? "8–12" : "45s") || (mode === "reps" ? `${targetReps}` : `${targetTimeSec}s`);
-    const suggestedWeightKg = roundToNearest(parseFloat(prompt("Peso sugerido (kg, 0 si corporal)", "0") || "0"), 0.25);
+    let targetTimeSec = 45;
+    let targetRepsRange = "8–12";
+    if (mode === "time") {
+      targetTimeSec = parseInt(prompt("Segundos por serie") || "45", 10);
+      targetRepsRange = prompt("Rango tiempo a mostrar", `${targetTimeSec}s`) || `${targetTimeSec}s`;
+    } else {
+      targetRepsRange = prompt("Rango reps a mostrar", "8–12") || "8–12";
+    }
     const restSec = parseInt(prompt("Descanso por ejercicio (seg, vacío=global)") || "0", 10) || undefined;
     const notes = prompt("Notas (opcional)") || "";
-    const groupId = prompt("Grupo (opcional, ej: A/B/1/2)") || undefined;
-    const ex = { id: uid(), name, category, mode, targetSets, targetReps, targetTimeSec, targetRepsRange, suggestedWeightKg, restSec, notes, groupId };
-    setData((d) => ({ ...d, routines: d.routines.map((rr) => (rr.id === routineId ? { ...rr, exercises: [...rr.exercises, ex] } : rr)) }));
+    const id = `custom/${uid()}`;
+    const ex = {
+      id,
+      name,
+      mode,
+      category,
+      muscles: [MUSCLE_FROM_NAME(name)],
+      fixed: { targetSets, targetRepsRange, targetTimeSec: mode === 'time' ? targetTimeSec : undefined, restSec },
+      notes,
+    };
+    setData(d => ({
+      ...d,
+      customExercisesById: { ...(d.customExercisesById || {}), [id]: ex },
+      userRoutinesIndex: { ...(d.userRoutinesIndex || {}), [routineId]: [...(d.userRoutinesIndex?.[routineId] || []), id] }
+    }));
   };
-  const deleteExercise = (routineId, exId) => { if (!confirm("¿Eliminar ejercicio?")) return; setData((d) => ({ ...d, routines: d.routines.map((rr) => (rr.id === routineId ? { ...rr, exercises: rr.exercises.filter((e) => e.id !== exId) } : rr)) })); };
+  const deleteExercise = (routineId, exId) => {
+    if (!confirm("¿Eliminar ejercicio?")) return;
+    setData(d => ({
+      ...d,
+      userRoutinesIndex: { ...(d.userRoutinesIndex || {}), [routineId]: (d.userRoutinesIndex?.[routineId] || []).filter(id => id !== exId) }
+    }));
+  };
 
   // ---------- Analytics ----------
   const perExerciseHistory = useMemo(() => {
@@ -589,8 +573,8 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
       for (const ex of sessionExercises) {
         if (!copy[ex.id]) {
           const prof = data.profileByExerciseId?.[ex.id];
-          const baseWeight = kgOrLb((prof?.next?.weightKg ?? (ex.suggestedWeightKg || 0)), unit);
-          const baseReps = ex.mode === "reps" ? (prof?.next?.reps ?? (ex.targetReps || 10)) : (ex.targetTimeSec || 45);
+          const baseWeight = kgOrLb((prof?.next?.weightKg ?? prof?.last?.weightKg ?? 0), unit);
+          const baseReps = ex.mode === "reps" ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(ex)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (ex.targetTimeSec || 45));
           copy[ex.id] = {
             sets: Array.from({ length: ex.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
             drop: ex.notes?.toLowerCase().includes("drop") ? { reps: ex.mode === "reps" ? Math.ceil((ex.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
@@ -620,8 +604,8 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
       const copy = { ...p };
       delete copy[oldEx.id];
       const prof = data.profileByExerciseId?.[newEx.id];
-      const baseWeight = kgOrLb((prof?.next?.weightKg ?? (newEx.suggestedWeightKg || 0)), unit);
-      const baseReps = newEx.mode === 'reps' ? (prof?.next?.reps ?? (newEx.targetReps || 10)) : (newEx.targetTimeSec || 45);
+      const baseWeight = kgOrLb((prof?.next?.weightKg ?? prof?.last?.weightKg ?? 0), unit);
+      const baseReps = newEx.mode === 'reps' ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(newEx)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (newEx.targetTimeSec || 45));
       copy[newEx.id] = {
         sets: Array.from({ length: newEx.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
         drop: newEx.notes?.toLowerCase().includes('drop') ? { reps: newEx.mode === 'reps' ? Math.ceil((newEx.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
@@ -636,18 +620,15 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
   };
 
   const viewAlternative = (ex) => {
-    const group = MUSCLE_FROM_NAME(ex.name);
-    const impl = IMPLEMENT_FROM_NAME(ex.name);
-    let candidates = routines.flatMap((r) => r.exercises).filter((e) => e.id !== ex.id && MUSCLE_FROM_NAME(e.name) === group);
-    const sameImpl = candidates.filter((e) => IMPLEMENT_FROM_NAME(e.name) === impl);
-    if (sameImpl.length >= 3) candidates = sameImpl;
+    const candidates = suggestAlternativesByExerciseId(ex.id);
     if (candidates.length === 0) return alert('Sin alternativas disponibles');
     const list = candidates.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
     const pick = prompt(`Alternativas:\n${list}\nNúmero?`);
     const idx = parseInt(pick || '', 10) - 1;
-    if (!candidates[idx]) return;
-    const alt = { ...candidates[idx] };
-    replaceExercise(ex, alt);
+    const alt = candidates[idx];
+    if (!alt) return;
+    const resolved = resolveExercise(alt.id, data.customExercisesById);
+    if (resolved) replaceExercise(ex, resolved);
   };
 
   const registerExercise = (ex) => {
@@ -827,43 +808,35 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
               const st = perExerciseState[ex.id] || { sets: [] };
               const prof = data.profileByExerciseId?.[ex.id];
               let suggestion = "";
-              if (prof?.next && prof?.last) {
-                const deltaW = (prof.next.weightKg ?? prof.last.weightKg) - prof.last.weightKg;
-                if (Math.abs(deltaW) > 0.001) {
-                  suggestion = `${deltaW > 0 ? '↑' : '↓'} ${deltaW > 0 ? '+' : ''}${kgOrLb(Math.abs(deltaW), unit)} ${unit}`;
-                } else {
-                  const deltaR = (prof.next.reps ?? prof.last.reps) - prof.last.reps;
-                  if (deltaR !== 0) {
-                    suggestion = `↔︎ ${deltaR > 0 ? '+' : ''}${deltaR} rep${Math.abs(deltaR) === 1 ? '' : 's'}`;
-                  } else {
-                    suggestion = `↔︎ mantener`;
-                  }
-                }
+              if (prof?.next) {
+                suggestion = ex.mode === 'reps'
+                  ? `${kgOrLb(prof.next.weightKg || 0, unit)} ${unit} × ${prof.next.reps}`
+                  : `${prof.next.reps}s`;
+              } else if (prof?.last) {
+                suggestion = ex.mode === 'reps'
+                  ? `${kgOrLb(prof.last.weightKg || 0, unit)} ${unit} × ${prof.last.reps}`
+                  : `${prof.last.reps}s`;
               }
               const setupParts = [];
-              const setup = prof?.last?.setup || {};
-              if (setup.height > 0) setupParts.push(`Altura: ${setup.height}`);
-              if (setup.incline > 0) setupParts.push(`Inclinación: ${setup.incline}`);
-              if (setup.seat > 0) setupParts.push(`Asiento: ${setup.seat}`);
+              if (ex.pulleyHeightMark > 0) setupParts.push(`Altura ${ex.pulleyHeightMark}`);
+              if (ex.benchAngleDeg > 0) setupParts.push(`${ex.benchAngleDeg}°`);
+              if (ex.seatHeightMark > 0) setupParts.push(`Asiento ${ex.seatHeightMark}`);
               const setupText = setupParts.length ? ` · ${setupParts.join(' · ')}` : "";
               return (
                 <div key={ex.id} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
                   <div className="mb-1">
                     <div className="text-base font-semibold leading-tight">{idx + 1}. {ex.name}</div>
                     <div className="text-xs text-zinc-500">
-                      Rango: {ex.targetSets}×{ex.mode === "reps" ? (ex.targetRepsRange || ex.targetReps) : (ex.targetRepsRange || `${ex.targetTimeSec}s`)}
-                      {" · "}
-                      Sug.: {kgOrLb(ex.suggestedWeightKg || 0, unit)} {unit}
-                      {" · "}
-                      Tempo: {tempoSugerido(ex.category, ex.mode)}
+                      {ex.targetSets}×{ex.mode === "reps" ? (ex.targetRepsRange) : (ex.targetRepsRange || `${ex.targetTimeSec}s`)}
+                      {suggestion ? ` · Sugerencia ${suggestion}` : ""}
+                      {ex.restSec ? ` · ${ex.restSec}s` : ""}
+                      {` · Tempo: ${tempoSugerido(ex.category, ex.mode)}`}
+                      {setupText}
                       {ex.notes ? ` · ${ex.notes}` : ""}
                     </div>
-                    {suggestion && (
-                      <div className="text-xs text-zinc-500">Sugerencia: {suggestion}{setupText}</div>
-                    )}
-                  </div>
+                    </div>
 
-                  {/* Filas por serie con checkbox */}
+                    {/* Filas por serie con checkbox */}
                   {!st.completed && (
                       <div className="mt-3 space-y-2">
                         {st.sets.map((row, i) => (
@@ -1041,14 +1014,6 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
 
           {openId === r.id && (
             <div className="mt-3">
-              <div className="flex gap-2 mb-2">
-                <Button className="text-xs" onClick={()=> {
-                  const gid = prompt('Id de grupo (ej: A, B, 1, 2)');
-                  if (!gid) return;
-                  setData(d=>({...d, routines: d.routines.map(rr=> rr.id!==r.id ? rr : ({...rr, exercises: rr.exercises.map(e=> ({...e, groupId: e.id=== (window.__lastSelectedEx || '') ? e.groupId : (e.groupId||gid)})) }))}));
-                }}>Asignar grupo</Button>
-                <span className="text-xs text-zinc-500">Tip: toca un ejercicio para marcarlo como “último seleccionado” y luego presiona “Asignar grupo”.</span>
-              </div>
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm text-zinc-500">Ejercicios</div>
                 <Button onClick={() => addExercise(r.id)} className="text-xs"><Plus size={14} className="inline mr-1" /> Agregar</Button>
@@ -1056,20 +1021,23 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
               {r.exercises.length === 0 && <div className="text-sm text-zinc-500">Sin ejercicios aún.</div>}
               <div className="space-y-2">
                 {r.exercises.map((ex, i) => (
-                  <div key={ex.id} className="p-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50" onClick={()=>{ window.__lastSelectedEx = ex.id; }}
+                  <div key={ex.id} className="p-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50"
                        draggable onDragStart={(e)=> e.dataTransfer.setData('text/plain', ex.id)}
                        onDragOver={(e)=> e.preventDefault()}
                        onDrop={(e)=>{ e.preventDefault(); const dragged = e.dataTransfer.getData('text/plain');
                          if(!dragged || dragged===ex.id) return;
-                         setData(d=>({...d, routines: d.routines.map(rr=> rr.id!==r.id?rr:({...rr, exercises: (()=>{
-                            const arr=[...rr.exercises]; const from=arr.findIndex(e=>e.id===dragged); const to=arr.findIndex(e=>e.id===ex.id);
-                            const [item]=arr.splice(from,1); arr.splice(to,0,item); return arr; })() }))}));
+                         setData(d=>({
+                           ...d,
+                           userRoutinesIndex:{
+                             ...(d.userRoutinesIndex||{}),
+                             [r.id]:(()=>{ const arr=[...(d.userRoutinesIndex?.[r.id]||[])]; const from=arr.indexOf(dragged); const to=arr.indexOf(ex.id); if(from===-1||to===-1) return arr; const [item]=arr.splice(from,1); arr.splice(to,0,item); return arr; })()
+                           }
+                         }));
                        }}>
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-medium">{i + 1}. {ex.name}</div>
-                        <div className="text-xs text-zinc-500">{ex.mode === "reps" ? `${ex.targetSets}×${ex.targetRepsRange || ex.targetReps}` : `${ex.targetSets}×${ex.targetRepsRange || `${ex.targetTimeSec}s`}`} · Sug: {ex.suggestedWeightKg} kg {ex.restSec ? `· ${ex.restSec}s` : ""} {ex.notes ? `· ${ex.notes}` : ""}</div>
-                        <div className="text-[11px] text-zinc-500">Grupo: {ex.groupId ?? '-'}</div>
+                        <div className="text-xs text-zinc-500">{ex.mode === "reps" ? `${ex.targetSets}×${ex.targetRepsRange}` : `${ex.targetSets}×${ex.targetTimeSec || ex.targetRepsRange}`} {ex.restSec ? `· ${ex.restSec}s` : ""} {ex.notes ? `· ${ex.notes}` : ""}</div>
                       </div>
                       <div className="flex items-center gap-2">
                         <IconButton onClick={() => { setEditingExId(ex.id); setDraft({ ...ex }); }} title="Editar"><Edit3 size={16} /></IconButton>
@@ -1092,27 +1060,44 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
                         <Input type="number" value={draft?.targetSets||0} onChange={e=>setDraft(d=>({...d, targetSets:parseInt(e.target.value||0,10)}))} />
                         {draft?.mode === 'reps' ? (
                           <>
-                            <Input type="number" placeholder="Reps" value={draft?.targetReps||0} onChange={e=>setDraft(d=>({...d, targetReps:parseInt(e.target.value||0,10)}))} />
+                            <Input placeholder="Rango reps" value={draft?.targetRepsRange||''} onChange={e=>setDraft(d=>({...d, targetRepsRange:e.target.value}))} />
                           </>
                         ) : (
                           <>
                             <Input type="number" placeholder="Segundos" value={draft?.targetTimeSec||0} onChange={e=>setDraft(d=>({...d, targetTimeSec:parseInt(e.target.value||0,10)}))} />
+                            <Input placeholder="Rango" value={draft?.targetRepsRange||''} onChange={e=>setDraft(d=>({...d, targetRepsRange:e.target.value}))} />
                           </>
                         )}
-                        <Input placeholder="Rango (ej: 8–12 o 45s)" value={draft?.targetRepsRange||''} onChange={e=>setDraft(d=>({...d, targetRepsRange:e.target.value}))} />
-                        <Input type="number" step="0.25" inputMode="decimal" placeholder="Peso sugerido (kg)" value={draft?.suggestedWeightKg||0} onChange={e=>setDraft(d=>({...d, suggestedWeightKg:roundToNearest(parseFloat(e.target.value||0),0.25)}))} />
                         <Input type="number" placeholder="Descanso (seg)" value={draft?.restSec||0} onChange={e=>setDraft(d=>({...d, restSec:parseInt(e.target.value||0,10)}))} />
                         <Input className="col-span-2" placeholder="Notas" value={draft?.notes||''} onChange={e=>setDraft(d=>({...d, notes:e.target.value}))} />
                         <div className="col-span-2 flex gap-2 justify-end">
                           <Button className="text-sm" onClick={() => { setEditingExId(null); setDraft(null); }}>Cancelar</Button>
                           <Button className="text-sm bg-emerald-600" onClick={()=>{
-                            setData(d=>({
-                              ...d,
-                              routines:d.routines.map(rr=> rr.id!==r.id ? rr : ({
-                                ...rr,
-                                exercises: rr.exercises.map(e2=> e2.id===ex.id ? { ...e2, ...draft } : e2)
-                              }))
-                            }));
+                            if(ex.id.startsWith('custom/')){
+                              setData(d=>({
+                                ...d,
+                                customExercisesById:{
+                                  ...(d.customExercisesById||{}),
+                                  [ex.id]:{
+                                    ...(d.customExercisesById?.[ex.id]||{}),
+                                    name:draft.name,
+                                    mode:draft.mode,
+                                    category:draft.category,
+                                    muscles:[MUSCLE_FROM_NAME(draft.name)],
+                                    fixed:{ targetSets:draft.targetSets, targetRepsRange:draft.targetRepsRange, targetTimeSec:draft.targetTimeSec, restSec:draft.restSec },
+                                    notes:draft.notes
+                                  }
+                                }
+                              }));
+                            } else {
+                              const newId = `custom/${uid()}`;
+                              const newEx = { id:newId, name:draft.name, mode:draft.mode, category:draft.category, muscles:[MUSCLE_FROM_NAME(draft.name)], fixed:{ targetSets:draft.targetSets, targetRepsRange:draft.targetRepsRange, targetTimeSec:draft.targetTimeSec, restSec:draft.restSec }, notes:draft.notes };
+                              setData(d=>({
+                                ...d,
+                                customExercisesById:{ ...(d.customExercisesById||{}), [newId]: newEx },
+                                userRoutinesIndex:{ ...(d.userRoutinesIndex||{}), [r.id]:(d.userRoutinesIndex?.[r.id]||[]).map(id=> id===ex.id ? newId : id) }
+                              }));
+                            }
                             setEditingExId(null);
                             setDraft(null);
                           }}>Guardar</Button>
@@ -1545,7 +1530,7 @@ function computeWeeklyVolume(sessions) {
 function distributionPorGrupo(sessions, routines, days = 30, routineId = 'all') {
   const exGroup = new Map();
   for (const r of routines) {
-    for (const ex of r.exercises) exGroup.set(ex.id, MUSCLE_FROM_NAME(ex.name));
+    for (const ex of r.exercises) exGroup.set(ex.id, primaryGroup(ex) || 'otros');
   }
   const since = Date.now() - days * 24 * 3600 * 1000;
   const res = { pecho: 0, espalda: 0, pierna: 0, hombro: 0, brazo: 0, core: 0, otros: 0 };
@@ -1566,7 +1551,7 @@ function distributionPorGrupo(sessions, routines, days = 30, routineId = 'all') 
 function volumenSemanalApilado(sessions, routines, weeks = 8, routineId = 'all') {
   const exGroup = new Map();
   for (const r of routines) {
-    for (const ex of r.exercises) exGroup.set(ex.id, MUSCLE_FROM_NAME(ex.name));
+    for (const ex of r.exercises) exGroup.set(ex.id, primaryGroup(ex) || 'otros');
   }
   const since = Date.now() - weeks * 7 * 24 * 3600 * 1000;
   const out = {};
