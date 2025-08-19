@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
 
 // =====================================
 // NicoFit — single-file React app (v1.6)
@@ -1135,7 +1135,7 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
   const filteredSessions = useMemo(()=>{
     const since = Date.now() - days*24*3600*1000;
     return sessions.filter(s=> new Date(s.dateISO).getTime() >= since && s.type==='strength' && (routineFilter==='all' || s.routineId===routineFilter));
-  }, [sessions, range, routineFilter]);
+  }, [sessions, days, routineFilter]);
   const totalSesiones = filteredSessions.length;
   const volumen4Semanas = useMemo(()=> {
     const since = Date.now() - 28*24*3600*1000;
@@ -1175,20 +1175,9 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
 
   const chartData = (perExerciseHistory.get(exId) || []);
   const weekly8 = (weeklyVolume || []).slice(-(8));
-  const weeklyByGroup = useMemo(()=>{
-    const out = {};
-    for (const s of sessions.filter(x=>x.type==='strength' && (routineFilter==='all' || x.routineId===routineFilter))) {
-      const d = new Date(s.dateISO); const wk = `${d.getUTCFullYear()}-W${weekNumber(d)}`;
-      if (!out[wk]) out[wk] = { week: wk, pecho:0, espalda:0, pierna:0, hombro:0, brazo:0, core:0, otros:0 };
-      for (const st of s.sets||[]) {
-        if (st.mode==='time') continue;
-        const exName = (routines.flatMap(r=>r.exercises).find(e=> e.id===st.exerciseId)||{}).name || '';
-        const g = MUSCLE_FROM_NAME(exName);
-        out[wk][g] += st.weightKg*st.reps;
-      }
-    }
-    return Object.values(out).sort((a,b)=> a.week.localeCompare(b.week)).slice(-8);
-  }, [sessions, routines, routineFilter]);
+  const distrib = useMemo(()=> distributionPorGrupo(sessions, routines, days, routineFilter), [sessions, routines, days, routineFilter]);
+  const weeklyStack = useMemo(()=> volumenSemanalApilado(sessions, routines, Math.min(8, Math.ceil(days/7)), routineFilter), [sessions, routines, days, routineFilter]);
+  const prs = useMemo(()=> prsRecientes(sessions, routines, days, routineFilter), [sessions, routines, days, routineFilter]);
 
   return (
     <div className="space-y-4">
@@ -1208,7 +1197,7 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
           </select>
         </div>
         <div className="grid grid-cols-3 gap-2 mb-3">
-          <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Sesiones (30d)</div><div className="text-lg font-semibold">{totalSesiones}</div></Card>
+          <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Sesiones ({range}d)</div><div className="text-lg font-semibold">{totalSesiones}</div></Card>
           <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Volumen (4 sem)</div><div className="text-lg font-semibold">{Math.round(volumen4Semanas)} kg·rep</div></Card>
           <Card className="p-3 text-center"><div className="text-xs text-zinc-500">PRs (4 sem)</div><div className="text-lg font-semibold">{prsUltimas4}</div></Card>
         </div>
@@ -1222,12 +1211,33 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div className="h-44 mt-3">
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="text-lg font-semibold mb-2">Distribución por grupo</h2>
+        <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={weeklyByGroup}>
+            <PieChart>
+              <Pie data={distrib} dataKey="volume" nameKey="group" labelLine={false} label={({percent}) => `${Math.round(percent*100)}%`}>
+                {distrib.map((d) => (
+                  <Cell key={d.group} fill={GROUP_COLORS[d.group]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(v) => `${Math.round(v)} kg·rep`} />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="text-lg font-semibold mb-2">Volumen semanal por grupo</h2>
+        <div className="h-48">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={weeklyStack}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="week" hide />
-              <Tooltip />
+              <Tooltip formatter={(v) => `${Math.round(v)} kg·rep`} />
               <Legend />
               <Bar dataKey="pecho" fill={GROUP_COLORS.pecho} stackId="a" />
               <Bar dataKey="espalda" fill={GROUP_COLORS.espalda} stackId="a" />
@@ -1238,6 +1248,19 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
               <Bar dataKey="otros" fill={GROUP_COLORS.otros} stackId="a" />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <h2 className="text-lg font-semibold mb-2">PRs recientes</h2>
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 divide-y">
+          {prs.map((pr) => (
+            <div key={pr.id} className="flex justify-between px-3 py-2 text-sm">
+              <span className="truncate">{pr.name}</span>
+              <span className="text-xs text-zinc-500">{pr.metric} · {new Date(pr.dateISO).toLocaleDateString()}</span>
+            </div>
+          ))}
+          {prs.length === 0 && <div className="px-3 py-2 text-sm text-zinc-500">Sin PRs.</div>}
         </div>
       </Card>
 
@@ -1510,6 +1533,91 @@ function computeWeeklyVolume(sessions) {
     res[wk] = (res[wk] || 0) + (s.totalVolume || 0);
   }
   return Object.entries(res).map(([week, volume]) => ({ week, volume: Math.round(volume) })).sort((a, b) => a.week.localeCompare(b.week));
+}
+
+// Distribución de volumen por grupo muscular en ventana de "days" días
+function distributionPorGrupo(sessions, routines, days = 30, routineId = 'all') {
+  const exGroup = new Map();
+  for (const r of routines) {
+    for (const ex of r.exercises) exGroup.set(ex.id, MUSCLE_FROM_NAME(ex.name));
+  }
+  const since = Date.now() - days * 24 * 3600 * 1000;
+  const res = { pecho: 0, espalda: 0, pierna: 0, hombro: 0, brazo: 0, core: 0, otros: 0 };
+  for (const s of sessions) {
+    if (s.type !== 'strength') continue;
+    if (routineId !== 'all' && s.routineId !== routineId) continue;
+    if (new Date(s.dateISO).getTime() < since) continue;
+    for (const st of s.sets || []) {
+      if (st.mode === 'time') continue;
+      const g = exGroup.get(st.exerciseId) || 'otros';
+      res[g] += (st.weightKg || 0) * (st.reps || 0);
+    }
+  }
+  return Object.entries(res).map(([group, volume]) => ({ group, volume }));
+}
+
+// Volumen semanal apilado por grupo muscular
+function volumenSemanalApilado(sessions, routines, weeks = 8, routineId = 'all') {
+  const exGroup = new Map();
+  for (const r of routines) {
+    for (const ex of r.exercises) exGroup.set(ex.id, MUSCLE_FROM_NAME(ex.name));
+  }
+  const since = Date.now() - weeks * 7 * 24 * 3600 * 1000;
+  const out = {};
+  for (const s of sessions) {
+    if (s.type !== 'strength') continue;
+    if (routineId !== 'all' && s.routineId !== routineId) continue;
+    const d = new Date(s.dateISO);
+    if (d.getTime() < since) continue;
+    const wk = `${d.getUTCFullYear()}-W${weekNumber(d)}`;
+    if (!out[wk]) out[wk] = { week: wk, pecho:0, espalda:0, pierna:0, hombro:0, brazo:0, core:0, otros:0 };
+    for (const st of s.sets || []) {
+      if (st.mode === 'time') continue;
+      const g = exGroup.get(st.exerciseId) || 'otros';
+      out[wk][g] += (st.weightKg || 0) * (st.reps || 0);
+    }
+  }
+  return Object.values(out).sort((a,b)=> a.week.localeCompare(b.week)).slice(-weeks);
+}
+
+// Lista de PRs recientes (e1RM, volumen, reps) en ventana de "days" días
+function prsRecientes(sessions, routines, days = 30, routineId = 'all') {
+  const exName = new Map();
+  for (const r of routines) {
+    for (const ex of r.exercises) exName.set(ex.id, ex.name);
+  }
+  const sorted = [...sessions]
+    .filter(s=> s.type==='strength' && (routineId==='all' || s.routineId===routineId))
+    .sort((a,b)=> new Date(a.dateISO) - new Date(b.dateISO));
+  const bestE1 = new Map();
+  const bestVol = new Map();
+  const bestReps = new Map();
+  const res = [];
+  const since = Date.now() - days * 24 * 3600 * 1000;
+  for (const s of sorted) {
+    const t = new Date(s.dateISO).getTime();
+    for (const st of s.sets || []) {
+      if (st.mode === 'time') continue;
+      const id = st.exerciseId;
+      const name = exName.get(id) || 'Ejercicio';
+      const vol = (st.weightKg || 0) * (st.reps || 0);
+      const e1 = epley1RM(st.weightKg, st.reps);
+      const reps = st.reps || 0;
+      if (e1 > (bestE1.get(id) || 0)) {
+        if (t >= since) res.push({ id: `${st.id}-e1`, name, metric: 'e1RM', dateISO: s.dateISO });
+        bestE1.set(id, e1);
+      }
+      if (vol > (bestVol.get(id) || 0)) {
+        if (t >= since) res.push({ id: `${st.id}-vol`, name, metric: 'volumen', dateISO: s.dateISO });
+        bestVol.set(id, vol);
+      }
+      if (reps > (bestReps.get(id) || 0)) {
+        if (t >= since) res.push({ id: `${st.id}-reps`, name, metric: '+reps', dateISO: s.dateISO });
+        bestReps.set(id, reps);
+      }
+    }
+  }
+  return res.sort((a,b)=> new Date(b.dateISO) - new Date(a.dateISO)).slice(0,5);
 }
 
 // ---------- Dev self-tests (console) ----------
