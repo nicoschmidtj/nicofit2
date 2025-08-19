@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
+import { migrateToTemplates } from "./lib/migrations.js";
 
 // =====================================
 // NicoFit — single-file React app (v1.6)
@@ -93,7 +94,7 @@ const GROUP_COLORS = { pecho:'#EF4444', espalda:'#3B82F6', pierna:'#10B981', hom
 
 // ---------- Default dataset (pre-cargada con Rutina 1) ----------
 const DEFAULT_DATA = {
-  version: 4,
+  version: 5,
   settings: {
     unit: "kg", // "kg" | "lb"
     defaultRestSec: 90,
@@ -160,11 +161,13 @@ const DEFAULT_DATA = {
   ],
   sessions: [], // strength + cardio
   profileByExerciseId: {},
+  userRoutinesIndex: {},
+  customExercisesById: {},
 };
 
 // ---------- Storage ----------
-const LS_KEY = "nicofit_data_v4";
-const load = () => {
+const LS_KEY = "nicofit_data_v5";
+const loadFromLS = () => {
   try {
     const raw = localStorage.getItem(LS_KEY);
     const parsed = raw ? JSON.parse(raw) : DEFAULT_DATA;
@@ -237,7 +240,10 @@ const TABS = [
 
 // ---------- Main App ----------
 export default function App() {
-  const [data, setData] = useState(load());
+const [data, setData] = useState(() => {
+  const raw = loadFromLS();
+  return migrateToTemplates(raw);
+});
   const [tab, setTab] = useState("today");
   const [activeSession, setActiveSession] = useState(null); // {id,type,dateISO,routineId,sets:[],startedAt,kcal?}
   const [restSec, setRestSec] = useState(0);
