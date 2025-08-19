@@ -1,4 +1,4 @@
-import repoJson from '../data/exercisesRepo.json';
+import repoJson from '../data/exercisesRepo.json' with { type: 'json' };
 
 /**
  * Load the exercises repository.
