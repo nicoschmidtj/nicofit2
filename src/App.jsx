@@ -27,30 +27,43 @@ const kgOrLb = (val, unit) => (unit === "lb" ? Math.round(val * 2.20462 * 10) / 
 const fromDisplayToKg = (val, unit) => (unit === "lb" ? Math.round((val / 2.20462) * 10) / 10 : val);
 const roundToNearest = (val, step = 1) => Math.round(val / step) * step;
 const rpeToRir = (rpe) => {
-  const x = parseFloat(rpe || 0);
+  const x = Math.round(parseFloat(rpe || 0));
   if (x >= 10) return 0;
-  if (x >= 9.5) return 0;
   if (x >= 9) return 1;
-  if (x >= 8.5) return 1;
   if (x >= 8) return 2;
-  if (x >= 7) return 3;
-  return 4;
+  return 3;
 };
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // Auto-progresión helpers
-const deltaFromRIR = (rir) => { if (rir <= 0) return +2.5; if (rir === 1) return +1.25; if (rir === 2) return +0.0; return -2.5; };
-const _nextSuggestion = ({ lastSet, ex, unit }) => {
-  if (!lastSet || ex.mode === 'time') return { reps: ex.targetReps, weight: kgOrLb(ex.suggestedWeightKg||0, unit), trend:'=' };
-  const rir = lastSet.rir ?? rpeToRir(lastSet.rpe ?? 8);
-  const delta = deltaFromRIR(rir); // kg
-  const baseW = lastSet.weightKg ?? fromDisplayToKg(lastSet.weight || 0, unit);
-  const baseReps = lastSet.reps || ex.targetReps || 10;
-  let reps = baseReps, weightKg = baseW;
-  if (delta > 0) { weightKg = baseW + delta; }
-  else if (delta < 0) { reps = Math.max(1, baseReps - 1); }
-  const trend = delta > 0 ? 'up' : delta < 0 ? 'down' : '=';
-  return { reps, weight: kgOrLb(weightKg, unit), trend };
+const LOAD_STEP_KG = 2.5;
+const parseRange = (ex) => {
+  if (ex.mode === 'time') return [ex.targetTimeSec || 0, ex.targetTimeSec || 0];
+  const str = ex.targetRepsRange || `${ex.targetReps || 0}`;
+  const nums = String(str).match(/\d+/g)?.map(n => parseInt(n,10)) || [];
+  if (nums.length === 0) return [ex.targetReps || 0, ex.targetReps || 0];
+  if (nums.length === 1) return [nums[0], nums[0]];
+  return [nums[0], nums[1]];
+};
+const calcNext = ({ last, ex, profile }) => {
+  if (!last || ex.mode === 'time') return {};
+  const [minReps, maxReps] = parseRange(ex);
+  const minW = profile?.minWeightKg || 0;
+  let weightKg = last.weightKg;
+  let reps = last.reps;
+  const rir = last.rir ?? rpeToRir(last.rpe || 8);
+  if (rir >= 3) {
+    weightKg = Math.max(minW, last.weightKg + LOAD_STEP_KG);
+  } else if (rir === 2) {
+    if (reps < maxReps) reps = reps + 1;
+  } else if (rir <= 0 || reps < minReps) {
+    if (last.weightKg - LOAD_STEP_KG >= minW) {
+      weightKg = Math.max(minW, last.weightKg - LOAD_STEP_KG);
+    } else {
+      reps = Math.max(1, reps - 1);
+    }
+  }
+  return { weightKg, reps };
 };
 
 // Mapeo de grupos musculares desde el nombre del ejercicio
@@ -136,6 +149,7 @@ const DEFAULT_DATA = {
     },
   ],
   sessions: [], // strength + cardio
+  profileByExerciseId: {},
 };
 
 // ---------- Storage ----------
@@ -414,6 +428,7 @@ export default function App() {
         {tab === "today" && (
           <TodayTab
             data={data}
+            setData={setData}
             routines={routines}
             activeSession={activeSession}
             startStrength={startStrength}
@@ -517,7 +532,7 @@ function tempoSugerido(category, mode) {
   return "controlado";
 }
 
-function TodayTab({ data, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash }) {
+function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash }) {
   const [routineId, setRoutineId] = useState(routines[0]?.id || "");
   useEffect(() => { if (!routineId && routines[0]) setRoutineId(routines[0].id); }, [routines, routineId]);
   const routine = routines.find((r) => r.id === (activeSession?.routineId || routineId));
@@ -534,9 +549,11 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
       const copy = { ...prev };
       for (const ex of routine.exercises) {
         if (!copy[ex.id]) {
-          const baseWeight = kgOrLb(ex.suggestedWeightKg || 0, unit);
+          const prof = data.profileByExerciseId?.[ex.id];
+          const baseWeight = kgOrLb((prof?.next?.weightKg ?? (ex.suggestedWeightKg || 0)), unit);
+          const baseReps = ex.mode === "reps" ? (prof?.next?.reps ?? (ex.targetReps || 10)) : (ex.targetTimeSec || 45);
           copy[ex.id] = {
-            sets: Array.from({ length: ex.targetSets || 3 }).map(() => ({ checked: false, reps: ex.mode === "reps" ? ex.targetReps || 10 : ex.targetTimeSec || 45, weight: baseWeight, rpe: 8 })),
+            sets: Array.from({ length: ex.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
             drop: ex.notes?.toLowerCase().includes("drop") ? { reps: ex.mode === "reps" ? Math.ceil((ex.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
             completed: false,
           };
@@ -544,7 +561,7 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
       }
       return copy;
     });
-  }, [routine, unit]);
+  }, [routine, unit, data.profileByExerciseId]);
 
   const hasActive = !!activeSession;
   const startSession = () => startStrength(routineId);
@@ -607,6 +624,13 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
     }
 
     setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
+    const lastValid = [...newSets].reverse().find(s => !s.drop);
+    if (lastValid) {
+      const prevProf = data.profileByExerciseId?.[ex.id] || {};
+      const last = { weightKg: lastValid.weightKg, reps: lastValid.reps, rir: lastValid.rir, dateISO: todayISO(), setup: prevProf.last?.setup };
+      const next = calcNext({ last, ex, profile: prevProf });
+      setData(d => ({ ...d, profileByExerciseId: { ...d.profileByExerciseId, [ex.id]: { ...prevProf, last, next } } }));
+    }
     const wasCompleted = st.completed;
     lastActionRef.current = {
       exId: ex.id,
@@ -724,6 +748,27 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
           <div className="mt-3 space-y-3">
             {routine.exercises.map((ex, idx) => {
               const st = perExerciseState[ex.id] || { sets: [] };
+              const prof = data.profileByExerciseId?.[ex.id];
+              let suggestion = "";
+              if (prof?.next && prof?.last) {
+                const deltaW = (prof.next.weightKg ?? prof.last.weightKg) - prof.last.weightKg;
+                if (Math.abs(deltaW) > 0.001) {
+                  suggestion = `${deltaW > 0 ? '↑' : '↓'} ${deltaW > 0 ? '+' : ''}${kgOrLb(Math.abs(deltaW), unit)} ${unit}`;
+                } else {
+                  const deltaR = (prof.next.reps ?? prof.last.reps) - prof.last.reps;
+                  if (deltaR !== 0) {
+                    suggestion = `↔︎ ${deltaR > 0 ? '+' : ''}${deltaR} rep${Math.abs(deltaR) === 1 ? '' : 's'}`;
+                  } else {
+                    suggestion = `↔︎ mantener`;
+                  }
+                }
+              }
+              const setupParts = [];
+              const setup = prof?.last?.setup || {};
+              if (setup.height > 0) setupParts.push(`Altura: ${setup.height}`);
+              if (setup.incline > 0) setupParts.push(`Inclinación: ${setup.incline}`);
+              if (setup.seat > 0) setupParts.push(`Asiento: ${setup.seat}`);
+              const setupText = setupParts.length ? ` · ${setupParts.join(' · ')}` : "";
               return (
                 <div key={ex.id} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
                   <div className="mb-1">
@@ -736,6 +781,9 @@ function TodayTab({ data, routines, activeSession, setActiveSession, startStreng
                       Tempo: {tempoSugerido(ex.category, ex.mode)}
                       {ex.notes ? ` · ${ex.notes}` : ""}
                     </div>
+                    {suggestion && (
+                      <div className="text-xs text-zinc-500">Sugerencia: {suggestion}{setupText}</div>
+                    )}
                   </div>
 
                   {/* Filas por serie con checkbox */}
@@ -1394,7 +1442,7 @@ function computeWeeklyVolume(sessions) {
 (function runDevTests(){
   try {
     console.assert(epley1RM(100, 1) === 100 + Math.round(100 * (1/30)), "epley1RM trivial");
-    console.assert(rpeToRir(10) === 0 && rpeToRir(9) === 1 && rpeToRir(8) === 2, "rpe→rir mapping");
+    console.assert(rpeToRir(10) === 0 && rpeToRir(9) === 1 && rpeToRir(8) === 2 && rpeToRir(7) === 3, "rpe→rir mapping");
     console.assert(weekNumber(new Date("2024-01-01")) >= 1, "week number");
     const wkEmpty = computeWeeklyVolume([]);
     console.assert(Array.isArray(wkEmpty) && wkEmpty.length === 0, "weeklyVolume empty");
