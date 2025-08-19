@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, 
 import { migrateToTemplates } from "./lib/migrations.js";
 import { getTemplateRoutineName, suggestAlternativesByExerciseId, primaryGroup } from "./lib/repoAdapter.js";
 import { resolveExercise } from "./lib/exerciseResolver.js";
+import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 
 // =====================================
 // NicoFit — single-file React app (v1.6)
@@ -116,9 +117,7 @@ const LS_KEY = "nicofit_data_v5";
 const loadFromLS = () => {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    const parsed = raw ? JSON.parse(raw) : DEFAULT_DATA;
-    const migrated = migrateToTemplates(parsed);
-    return { ...DEFAULT_DATA, ...migrated };
+    return raw ? JSON.parse(raw) : DEFAULT_DATA;
   } catch (e) {
     console.warn("Load failed, using defaults", e);
     return DEFAULT_DATA;
@@ -176,10 +175,18 @@ const TABS = [
 
 // ---------- Main App ----------
 export default function App() {
-const [data, setData] = useState(() => {
-  const raw = loadFromLS();
-  return migrateToTemplates(raw);
-});
+  const [data, setData] = useState(() => {
+    const initial = loadFromLS();
+    const migrated = migrateToTemplates(initial);
+    const merged = { ...DEFAULT_DATA, ...migrated };
+    if (!merged.userRoutinesIndex || Object.keys(merged.userRoutinesIndex).length === 0) {
+      merged.userRoutinesIndex = buildDefaultUserRoutinesIndex();
+      merged.customExercisesById = merged.customExercisesById || {};
+      merged.version = Math.max(5, merged.version || 5);
+      save(merged);
+    }
+    return merged;
+  });
   const [tab, setTab] = useState("today");
   const [activeSession, setActiveSession] = useState(null); // {id,type,dateISO,routineId,sets:[],startedAt,kcal?}
   const [restSec, setRestSec] = useState(0);
