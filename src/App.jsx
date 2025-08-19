@@ -79,6 +79,16 @@ const MUSCLE_FROM_NAME = (name='')=>{
   return 'otros';
 };
 
+// Mapeo simple de implemento desde el nombre
+const IMPLEMENT_FROM_NAME = (name='')=>{
+  const n = String(name).toLowerCase();
+  if (/(mancuerna|dumbbell)/.test(n)) return 'mancuerna';
+  if (/(barra|barbell)/.test(n)) return 'barra';
+  if (/(polea|cable)/.test(n)) return 'polea';
+  if (/(máquina|maquina|machine)/.test(n)) return 'maquina';
+  return 'otros';
+};
+
 const GROUP_COLORS = { pecho:'#EF4444', espalda:'#3B82F6', pierna:'#10B981', hombro:'#F59E0B', brazo:'#8B5CF6', core:'#06B6D4', otros:'#9CA3AF' };
 
 // ---------- Default dataset (pre-cargada con Rutina 1) ----------
@@ -273,6 +283,18 @@ export default function App() {
     } else {
       setDark(data.settings.theme === "dark");
     }
+  }, [data.settings.theme]);
+
+  useEffect(() => {
+    const applyTheme = () => {
+      const root = document.documentElement;
+      const isDark = data.settings.theme === 'system'
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        : data.settings.theme === 'dark';
+      root.classList.toggle('dark', isDark);
+    };
+    document.addEventListener('visibilitychange', applyTheme);
+    return () => document.removeEventListener('visibilitychange', applyTheme);
   }, [data.settings.theme]);
 
   const routines = data.routines;
@@ -537,6 +559,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
   useEffect(() => { if (!routineId && routines[0]) setRoutineId(routines[0].id); }, [routines, routineId]);
   const routine = routines.find((r) => r.id === (activeSession?.routineId || routineId));
 
+  const [sessionExercises, setSessionExercises] = useState([]);
   const [perExerciseState, setPerExerciseState] = useState({});
   const [openTimerMenu, setOpenTimerMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState({ name: "", sets: "1", reps: "", weight: "" });
@@ -544,10 +567,20 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
   // shape: { [exId]: { sets: [{checked, reps, weight, rpe}], drop?: {reps, weight}, completed: bool } }
 
   useEffect(() => {
-    if (!routine) return;
+    if (activeSession && routine) {
+      setSessionExercises(routine.exercises.map(e => ({ ...e })));
+      setPerExerciseState({});
+    } else {
+      setSessionExercises([]);
+      setPerExerciseState({});
+    }
+  }, [activeSession, routine]);
+
+  useEffect(() => {
+    if (sessionExercises.length === 0) return;
     setPerExerciseState((prev) => {
       const copy = { ...prev };
-      for (const ex of routine.exercises) {
+      for (const ex of sessionExercises) {
         if (!copy[ex.id]) {
           const prof = data.profileByExerciseId?.[ex.id];
           const baseWeight = kgOrLb((prof?.next?.weightKg ?? (ex.suggestedWeightKg || 0)), unit);
@@ -561,7 +594,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
       }
       return copy;
     });
-  }, [routine, unit, data.profileByExerciseId]);
+  }, [sessionExercises, unit, data.profileByExerciseId]);
 
   const hasActive = !!activeSession;
   const startSession = () => startStrength(routineId);
@@ -575,11 +608,48 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     if (!Number.isNaN(val)) startRest(val);
   };
 
+  const replaceExercise = (oldEx, newEx) => {
+    setSessionExercises((arr) => arr.map((e) => (e.id === oldEx.id ? { ...newEx } : e)));
+    setPerExerciseState((p) => {
+      const copy = { ...p };
+      delete copy[oldEx.id];
+      const prof = data.profileByExerciseId?.[newEx.id];
+      const baseWeight = kgOrLb((prof?.next?.weightKg ?? (newEx.suggestedWeightKg || 0)), unit);
+      const baseReps = newEx.mode === 'reps' ? (prof?.next?.reps ?? (newEx.targetReps || 10)) : (newEx.targetTimeSec || 45);
+      copy[newEx.id] = {
+        sets: Array.from({ length: newEx.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
+        drop: newEx.notes?.toLowerCase().includes('drop') ? { reps: newEx.mode === 'reps' ? Math.ceil((newEx.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
+        completed: false,
+      };
+      return copy;
+    });
+    setActiveSession((s) => s ? ({ ...s, sets: s.sets.filter((set) => set.exerciseId !== oldEx.id) }) : s);
+    lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
+    setPrFlash('Ejercicio reemplazado');
+    setTimeout(() => setPrFlash(''), 1000);
+  };
+
+  const viewAlternative = (ex) => {
+    const group = MUSCLE_FROM_NAME(ex.name);
+    const impl = IMPLEMENT_FROM_NAME(ex.name);
+    let candidates = routines.flatMap((r) => r.exercises).filter((e) => e.id !== ex.id && MUSCLE_FROM_NAME(e.name) === group);
+    const sameImpl = candidates.filter((e) => IMPLEMENT_FROM_NAME(e.name) === impl);
+    if (sameImpl.length >= 3) candidates = sameImpl;
+    if (candidates.length === 0) return alert('Sin alternativas disponibles');
+    const list = candidates.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+    const pick = prompt(`Alternativas:\n${list}\nNúmero?`);
+    const idx = parseInt(pick || '', 10) - 1;
+    if (!candidates[idx]) return;
+    const alt = { ...candidates[idx] };
+    replaceExercise(ex, alt);
+  };
+
   const registerExercise = (ex) => {
     if (!activeSession) return alert("Inicia la sesión primero");
     const st = perExerciseState[ex.id];
     if (!st) return;
     if (st.completed && !confirm("Ejercicio ya registrado. ¿Registrar nuevamente?")) return;
+    if (st.drop && st.sets.some((s) => !s.checked)) return alert("Completa todas las series base antes del drop-set");
     // push sets
     const newSets = [];
     st.sets.forEach((s) => {
@@ -648,7 +718,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
 
     // Superserie/Triserie: aviso y descanso compartido implícito
     if (ex.groupId) {
-      const mates = routine.exercises.filter(e=> e.groupId===ex.groupId && e.id!==ex.id);
+      const mates = sessionExercises.filter(e=> e.groupId===ex.groupId && e.id!==ex.id);
       setTimeout(() => {
         setPrFlash(`Superserie: ahora ${mates[0]?.name || 'siguiente del grupo'}`);
         setTimeout(() => setPrFlash(''), 1000);
@@ -681,6 +751,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     }));
 
     setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
+    lastActionRef.current = { exId, added: newSets.length, prevCompleted: false, undo: null };
     setQuickAdd({ name: "", sets: "1", reps: "", weight: "" });
     flashPR("Ejercicio extra agregado");
   };
@@ -746,7 +817,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
 
         {hasActive && routine && (
           <div className="mt-3 space-y-3">
-            {routine.exercises.map((ex, idx) => {
+            {sessionExercises.map((ex, idx) => {
               const st = perExerciseState[ex.id] || { sets: [] };
               const prof = data.profileByExerciseId?.[ex.id];
               let suggestion = "";
@@ -846,7 +917,10 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
 
                   {!st.completed && (
                   <div className="mt-3 flex items-center justify-between">
-                    <div className="text-xs text-zinc-500">Marca las series hechas y ajusta reps/peso si cambia</div>
+                    <div className="text-xs text-zinc-500">
+                      Marca las series hechas y ajusta reps/peso si cambia
+                      <Button className="ml-2 text-xs" onClick={() => viewAlternative(ex)}>Ver alternativa</Button>
+                    </div>
                     <Button onClick={() => registerExercise(ex)} className="text-sm">Registrar ejercicio</Button>
                   </div>
                   )}
