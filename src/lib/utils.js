@@ -2,8 +2,8 @@ import { getRoutineBaseDefaults, getExerciseDefaults } from './repoAdapter.js';
 
 export const roundToNearest = (val, step = 1) => Math.round(val / step) * step;
 
-export function getLastUsedSetForExercise(exId, sessions = []) {
-  for (let i = 0; i < sessions.length; i++) {
+export function getLastUsedSetForExercise(exId, sessions) {
+  for (let i = 0; i < (sessions?.length || 0); i++) {
     const s = sessions[i];
     if (s?.type !== 'strength') continue;
     const sets = Array.isArray(s.sets) ? [...s.sets].reverse() : [];
