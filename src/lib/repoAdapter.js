@@ -1,6 +1,6 @@
 import repo from '../data/exercisesRepo.json' with { type: 'json' };
 import { loadRepo, getExercise, listRoutine, primaryGroup, findAlternatives } from '../lib/repo.js';
-export { primaryGroup, loadRepo };
+export { primaryGroup, loadRepo, findAlternatives };
 
 export function getTemplateRoutineKeys() {
   return Object.keys(repo.routinesIndex || {});
