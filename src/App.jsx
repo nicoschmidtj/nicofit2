@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
 import { migrateToTemplates } from "./lib/migrations.js";
-import { getTemplateRoutineName, suggestAlternativesByExerciseId, primaryGroup } from "./lib/repoAdapter.js";
+import { getTemplateRoutineName, suggestAlternativesByExerciseId, primaryGroup, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
 import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
+import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
 
 // =====================================
 // NicoFit — single-file React app (v1.6)
@@ -29,7 +30,6 @@ const todayISO = () => toISODate().slice(0, 10);
 const epley1RM = (w, reps) => (w > 0 && reps > 0 ? Math.round(w * (1 + reps / 30)) : 0);
 const kgOrLb = (val, unit) => (unit === "lb" ? Math.round(val * 2.20462 * 10) / 10 : Math.round(val));
 const fromDisplayToKg = (val, unit) => (unit === "lb" ? Math.round((val / 2.20462) * 10) / 10 : val);
-const roundToNearest = (val, step = 1) => Math.round(val / step) * step;
 const rpeToRir = (rpe) => {
   const x = Math.round(parseFloat(rpe || 0));
   if (x >= 10) return 0;
@@ -179,12 +179,20 @@ export default function App() {
     const initial = loadFromLS();
     const migrated = migrateToTemplates(initial);
     const merged = { ...DEFAULT_DATA, ...migrated };
+    if (merged.userRoutinesIndex?.extra1?.length === 0) {
+      delete merged.userRoutinesIndex.extra1;
+      if (merged.customRoutineNames) delete merged.customRoutineNames.extra1;
+    }
+    if (merged.userRoutinesIndex?.extra2?.length === 0) {
+      delete merged.userRoutinesIndex.extra2;
+      if (merged.customRoutineNames) delete merged.customRoutineNames.extra2;
+    }
     if (!merged.userRoutinesIndex || Object.keys(merged.userRoutinesIndex).length === 0) {
       merged.userRoutinesIndex = buildDefaultUserRoutinesIndex();
       merged.customExercisesById = merged.customExercisesById || {};
       merged.version = Math.max(5, merged.version || 5);
-      save(merged);
     }
+    save(merged);
     return merged;
   });
   const [tab, setTab] = useState("today");
@@ -198,6 +206,7 @@ export default function App() {
   const lastActionRef = useRef({ exId: null, added: 0, prevCompleted: false });
   const restoredRef = useRef(false);
   const beep = useBeep();
+  const repo = useMemo(() => loadRepo(), []);
 
   useEffect(() => save(data), [data]);
   // Autoguardado de sesión activa (restaurar solo una vez al montar)
@@ -248,11 +257,13 @@ export default function App() {
 
   const routines = useMemo(() => {
     const idx = data.userRoutinesIndex || {};
-    return Object.keys(idx).map(key => ({
-      id: key,
-      name: data.customRoutineNames?.[key] || getTemplateRoutineName(key),
-      exercises: (idx[key] || []).map(id => resolveExercise(id, data.customExercisesById)).filter(Boolean),
-    }));
+    return Object.keys(idx)
+      .filter((key) => (idx[key] || []).length > 0)
+      .map(key => ({
+        id: key,
+        name: data.customRoutineNames?.[key] || getTemplateRoutineName(key),
+        exercises: (idx[key] || []).map(id => resolveExercise(id, data.customExercisesById)).filter(Boolean),
+      }));
   }, [data.userRoutinesIndex, data.customExercisesById, data.customRoutineNames]);
   const sessions = data.sessions;
 
@@ -360,35 +371,51 @@ export default function App() {
   const addExercise = (routineId) => {
     const arr = data.userRoutinesIndex?.[routineId] || [];
     if (arr.length >= 12) return alert("Límite: 12 ejercicios por rutina");
-    const name = prompt("Nombre del ejercicio");
-    if (!name) return;
-    const mode = (prompt("Modo (reps/time)", "reps") || "reps").toLowerCase() === "time" ? "time" : "reps";
-    const category = (prompt("Categoría (compuesto/aislado/core)", "compuesto") || "compuesto").toLowerCase();
-    const targetSets = parseInt(prompt("Series objetivo") || "3", 10);
-    let targetTimeSec = 45;
-    let targetRepsRange = "8–12";
-    if (mode === "time") {
-      targetTimeSec = parseInt(prompt("Segundos por serie") || "45", 10);
-      targetRepsRange = prompt("Rango tiempo a mostrar", `${targetTimeSec}s`) || `${targetTimeSec}s`;
-    } else {
-      targetRepsRange = prompt("Rango reps a mostrar", "8–12") || "8–12";
+    const groups = Array.from(new Set(Object.values(repo.byId || {}).map(e => e.muscles?.[0]).filter(Boolean)));
+    const list = groups.map((g, i) => `${i + 1}. ${g}`).join('\n');
+    const pickGroup = prompt(`Área muscular:\n${list}\nNúmero? (deja vacío para personalizado)`);
+    const group = groups[parseInt(pickGroup || '', 10) - 1];
+    if (!group) {
+      const name = prompt("Nombre del ejercicio");
+      if (!name) return;
+      const mode = (prompt("Modo (reps/time)", "reps") || "reps").toLowerCase() === "time" ? "time" : "reps";
+      const category = (prompt("Categoría (compuesto/aislado/core)", "compuesto") || "compuesto").toLowerCase();
+      const targetSets = parseInt(prompt("Series objetivo") || "3", 10);
+      let targetTimeSec = 45;
+      let targetRepsRange = "8–12";
+      if (mode === "time") {
+        targetTimeSec = parseInt(prompt("Segundos por serie") || "45", 10);
+        targetRepsRange = prompt("Rango tiempo a mostrar", `${targetTimeSec}s`) || `${targetTimeSec}s`;
+      } else {
+        targetRepsRange = prompt("Rango reps a mostrar", "8–12") || "8–12";
+      }
+      const restSec = parseInt(prompt("Descanso por ejercicio (seg, vacío=global)") || "0", 10) || undefined;
+      const notes = prompt("Notas (opcional)") || "";
+      const id = `custom/${uid()}`;
+      const ex = {
+        id,
+        name,
+        mode,
+        category,
+        muscles: [MUSCLE_FROM_NAME(name)],
+        fixed: { targetSets, targetRepsRange, targetTimeSec: mode === 'time' ? targetTimeSec : undefined, restSec },
+        notes,
+      };
+      setData(d => ({
+        ...d,
+        customExercisesById: { ...(d.customExercisesById || {}), [id]: ex },
+        userRoutinesIndex: { ...(d.userRoutinesIndex || {}), [routineId]: [...(d.userRoutinesIndex?.[routineId] || []), id] }
+      }));
+      return;
     }
-    const restSec = parseInt(prompt("Descanso por ejercicio (seg, vacío=global)") || "0", 10) || undefined;
-    const notes = prompt("Notas (opcional)") || "";
-    const id = `custom/${uid()}`;
-    const ex = {
-      id,
-      name,
-      mode,
-      category,
-      muscles: [MUSCLE_FROM_NAME(name)],
-      fixed: { targetSets, targetRepsRange, targetTimeSec: mode === 'time' ? targetTimeSec : undefined, restSec },
-      notes,
-    };
+    const candidates = findAlternatives(repo, { muscles: [group] });
+    const list2 = candidates.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+    const pickEx = prompt(`Ejercicio:\n${list2}\nNúmero?`);
+    const chosen = candidates[parseInt(pickEx || '', 10) - 1];
+    if (!chosen) return;
     setData(d => ({
       ...d,
-      customExercisesById: { ...(d.customExercisesById || {}), [id]: ex },
-      userRoutinesIndex: { ...(d.userRoutinesIndex || {}), [routineId]: [...(d.userRoutinesIndex?.[routineId] || []), id] }
+      userRoutinesIndex: { ...(d.userRoutinesIndex || {}), [routineId]: [...(d.userRoutinesIndex?.[routineId] || []), chosen.id] }
     }));
   };
   const deleteExercise = (routineId, exId) => {
@@ -461,6 +488,7 @@ export default function App() {
             weeklyVolume={weeklyVolume}
             lastActionRef={lastActionRef}
             setPrFlash={setPrFlash}
+            repo={repo}
           />
         )}
 
@@ -551,13 +579,14 @@ function tempoSugerido(category, mode) {
   return "controlado";
 }
 
-function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash }) {
+function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash, repo }) {
   const [routineId, setRoutineId] = useState(routines[0]?.id || "");
   useEffect(() => { if (!routineId && routines[0]) setRoutineId(routines[0].id); }, [routines, routineId]);
   const routine = routines.find((r) => r.id === (activeSession?.routineId || routineId));
 
   const [sessionExercises, setSessionExercises] = useState([]);
   const [perExerciseState, setPerExerciseState] = useState({});
+  const [sessionOverrides, setSessionOverrides] = useState({});
   const [openTimerMenu, setOpenTimerMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState({ name: "", sets: "1", reps: "", weight: "" });
 
@@ -567,31 +596,48 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     if (activeSession && routine) {
       setSessionExercises(routine.exercises.map(e => ({ ...e })));
       setPerExerciseState({});
+      setSessionOverrides({});
     } else {
       setSessionExercises([]);
       setPerExerciseState({});
+      setSessionOverrides({});
     }
   }, [activeSession, routine]);
 
   useEffect(() => {
     if (sessionExercises.length === 0) return;
+    sessionExercises.forEach(ex => {
+      const effectiveId = sessionOverrides[ex.id] || ex.id;
+      if (!data.profileByExerciseId?.[effectiveId]?.last) {
+        const last = getLastUsedSetForExercise(effectiveId, data.sessions);
+        if (last) {
+          setData(d => ({
+            ...d,
+            profileByExerciseId: { ...(d.profileByExerciseId || {}), [effectiveId]: { ...(d.profileByExerciseId?.[effectiveId] || {}), last } }
+          }));
+        }
+      }
+    });
     setPerExerciseState((prev) => {
       const copy = { ...prev };
       for (const ex of sessionExercises) {
         if (!copy[ex.id]) {
-          const prof = data.profileByExerciseId?.[ex.id];
-          const baseWeight = kgOrLb((prof?.next?.weightKg ?? prof?.last?.weightKg ?? 0), unit);
-          const baseReps = ex.mode === "reps" ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(ex)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (ex.targetTimeSec || 45));
+          const effectiveId = sessionOverrides[ex.id] || ex.id;
+          const resolved = resolveExercise(effectiveId, data.customExercisesById);
+          if (!resolved) continue;
+          const prof = data.profileByExerciseId?.[effectiveId];
+          const baseWeight = kgOrLb(getInitialWeightForExercise(effectiveId, data, repo), unit);
+          const baseReps = resolved.mode === "reps" ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(resolved)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (resolved.targetTimeSec || 45));
           copy[ex.id] = {
-            sets: Array.from({ length: ex.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
-            drop: ex.notes?.toLowerCase().includes("drop") ? { reps: ex.mode === "reps" ? Math.ceil((ex.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
+            sets: Array.from({ length: resolved.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
+            drop: resolved.notes?.toLowerCase().includes("drop") ? { reps: resolved.mode === "reps" ? Math.ceil((resolved.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
             completed: false,
           };
         }
       }
       return copy;
     });
-  }, [sessionExercises, unit, data.profileByExerciseId]);
+  }, [sessionExercises, unit, data.profileByExerciseId, sessionOverrides, data.sessions, repo, data.customExercisesById, setData]);
 
   const hasActive = !!activeSession;
   const startSession = () => startStrength(routineId);
@@ -605,42 +651,50 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     if (!Number.isNaN(val)) startRest(val);
   };
 
-  const replaceExercise = (oldEx, newEx) => {
-    setSessionExercises((arr) => arr.map((e) => (e.id === oldEx.id ? { ...newEx } : e)));
-    setPerExerciseState((p) => {
-      const copy = { ...p };
-      delete copy[oldEx.id];
-      const prof = data.profileByExerciseId?.[newEx.id];
-      const baseWeight = kgOrLb((prof?.next?.weightKg ?? prof?.last?.weightKg ?? 0), unit);
-      const baseReps = newEx.mode === 'reps' ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(newEx)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (newEx.targetTimeSec || 45));
-      copy[newEx.id] = {
-        sets: Array.from({ length: newEx.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
-        drop: newEx.notes?.toLowerCase().includes('drop') ? { reps: newEx.mode === 'reps' ? Math.ceil((newEx.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
-        completed: false,
-      };
-      return copy;
-    });
-    setActiveSession((s) => s ? ({ ...s, sets: s.sets.filter((set) => set.exerciseId !== oldEx.id) }) : s);
-    lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
-    setPrFlash('Ejercicio reemplazado');
-    setTimeout(() => setPrFlash(''), 1000);
-  };
-
-  const viewAlternative = (ex) => {
-    const candidates = suggestAlternativesByExerciseId(ex.id);
+  const viewAlternative = (origEx) => {
+    const effectiveId = sessionOverrides[origEx.id] || origEx.id;
+    const candidates = suggestAlternativesByExerciseId(effectiveId);
     if (candidates.length === 0) return alert('Sin alternativas disponibles');
     const list = candidates.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
     const pick = prompt(`Alternativas:\n${list}\nNúmero?`);
     const idx = parseInt(pick || '', 10) - 1;
     const alt = candidates[idx];
     if (!alt) return;
+    setSessionOverrides(prev => ({ ...prev, [origEx.id]: alt.id }));
+    if (!data.profileByExerciseId?.[alt.id]?.last) {
+      const last = getLastUsedSetForExercise(alt.id, data.sessions);
+      if (last) {
+        setData(d => ({
+          ...d,
+          profileByExerciseId: { ...(d.profileByExerciseId || {}), [alt.id]: { ...(d.profileByExerciseId?.[alt.id] || {}), last } }
+        }));
+      }
+    }
     const resolved = resolveExercise(alt.id, data.customExercisesById);
-    if (resolved) replaceExercise(ex, resolved);
+    if (resolved) {
+      const prof = data.profileByExerciseId?.[alt.id];
+      const baseWeight = kgOrLb(getInitialWeightForExercise(alt.id, data, repo), unit);
+      const baseReps = resolved.mode === 'reps' ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(resolved)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (resolved.targetTimeSec || 45));
+      setPerExerciseState(p => ({
+        ...p,
+        [origEx.id]: {
+          sets: Array.from({ length: resolved.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
+          drop: resolved.notes?.toLowerCase().includes('drop') ? { reps: resolved.mode === 'reps' ? Math.ceil((resolved.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
+          completed: false,
+        },
+      }));
+      setActiveSession(s => s ? ({ ...s, sets: s.sets.filter(set => set.exerciseId !== effectiveId) }) : s);
+      lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
+      setPrFlash('Ejercicio reemplazado');
+      setTimeout(() => setPrFlash(''), 1000);
+    }
   };
 
-  const registerExercise = (ex) => {
+  const registerExercise = (origEx) => {
     if (!activeSession) return alert("Inicia la sesión primero");
-    const st = perExerciseState[ex.id];
+    const effectiveId = sessionOverrides[origEx.id] || origEx.id;
+    const ex = resolveExercise(effectiveId, data.customExercisesById);
+    const st = perExerciseState[origEx.id];
     if (!st) return;
     if (st.completed && !confirm("Ejercicio ya registrado. ¿Registrar nuevamente?")) return;
     if (st.drop && st.sets.some((s) => !s.checked)) return alert("Completa todas las series base antes del drop-set");
@@ -653,7 +707,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         const wkg = fromDisplayToKg(wDisp, unit);
         const rpe = parseFloat(s.rpe || 8);
         const rir = rpeToRir(rpe);
-        newSets.push({ id: uid(), exerciseId: ex.id, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe, rir, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now() });
+        newSets.push({ id: uid(), exerciseId: effectiveId, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe, rir, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now() });
       }
     });
     if (st.drop && st.sets.filter((x) => x.checked).length === st.sets.length) {
@@ -661,7 +715,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
       const repsOrSec = parseInt(st.drop.reps || 0, 10);
       const wDisp = roundToNearest(parseFloat(st.drop.weight || 0), 0.25);
       const wkg = fromDisplayToKg(wDisp, unit);
-      newSets.push({ id: uid(), exerciseId: ex.id, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
+      newSets.push({ id: uid(), exerciseId: effectiveId, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
     }
     // Drop avanzado configurable (si no hay drop manual configurado en estado)
     if (!st.drop && ex.dropCfg && st.sets.filter((x)=>x.checked).length === st.sets.length) {
@@ -673,12 +727,12 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
       const baseReps = ex.mode==='reps' ? parseInt(lastChecked?.reps || ex.targetReps || 10, 10) : (ex.targetTimeSec||30);
       const reps = Math.max(1, baseReps + (isNaN(repsOffset) ? 0 : repsOffset));
       const wkg = Math.max(0, Math.round((lastW * percent/100) * 10)/10);
-      newSets.push({ id: uid(), exerciseId: ex.id, mode: ex.mode, reps, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
+      newSets.push({ id: uid(), exerciseId: effectiveId, mode: ex.mode, reps, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
     }
     if (newSets.length === 0) return alert("Marca al menos una serie");
 
     // PR detection vs previous
-    const bestE1 = bestE1RMForExercise(activeSession, data.sessions, ex.id);
+    const bestE1 = bestE1RMForExercise(activeSession, data.sessions, effectiveId);
     let raised = false;
     for (const n of newSets) {
       if (n.mode !== "time") {
@@ -690,19 +744,19 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
     const lastValid = [...newSets].reverse().find(s => !s.drop);
     if (lastValid) {
-      const prevProf = data.profileByExerciseId?.[ex.id] || {};
+      const prevProf = data.profileByExerciseId?.[effectiveId] || {};
       const last = { weightKg: lastValid.weightKg, reps: lastValid.reps, rir: lastValid.rir, dateISO: todayISO(), setup: prevProf.last?.setup };
       const next = calcNext({ last, ex, profile: prevProf });
-      setData(d => ({ ...d, profileByExerciseId: { ...d.profileByExerciseId, [ex.id]: { ...prevProf, last, next } } }));
+      setData(d => ({ ...d, profileByExerciseId: { ...d.profileByExerciseId, [effectiveId]: { ...prevProf, last, next } } }));
     }
     const wasCompleted = st.completed;
     lastActionRef.current = {
-      exId: ex.id,
+      exId: origEx.id,
       added: newSets.length,
       prevCompleted: wasCompleted,
-      undo: () => setPerExerciseState(p => ({ ...p, [ex.id]: { ...p[ex.id], completed: wasCompleted } }))
+      undo: () => setPerExerciseState(p => ({ ...p, [origEx.id]: { ...p[origEx.id], completed: wasCompleted } }))
     };
-    setPerExerciseState((p) => ({ ...p, [ex.id]: { ...p[ex.id], completed: true } }));
+    setPerExerciseState((p) => ({ ...p, [origEx.id]: { ...p[origEx.id], completed: true } }));
     setPrFlash('Ejercicio registrado');
     setTimeout(() => { setPrFlash(''); lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null }; }, 1000);
 
@@ -811,9 +865,11 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
 
         {hasActive && routine && (
           <div className="mt-3 space-y-3">
-            {sessionExercises.map((ex, idx) => {
-              const st = perExerciseState[ex.id] || { sets: [] };
-              const prof = data.profileByExerciseId?.[ex.id];
+            {sessionExercises.map((origEx, idx) => {
+              const effectiveId = sessionOverrides[origEx.id] || origEx.id;
+              const ex = resolveExercise(effectiveId, data.customExercisesById);
+              const st = perExerciseState[origEx.id] || { sets: [] };
+              const prof = data.profileByExerciseId?.[effectiveId];
               let suggestion = "";
               if (prof?.next) {
                 suggestion = ex.mode === 'reps'
@@ -830,7 +886,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
               if (ex.seatHeightMark > 0) setupParts.push(`Asiento ${ex.seatHeightMark}`);
               const setupText = setupParts.length ? ` · ${setupParts.join(' · ')}` : "";
               return (
-                <div key={ex.id} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
+                <div key={origEx.id} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
                   <div className="mb-1">
                     <div className="text-base font-semibold leading-tight">{idx + 1}. {ex.name}</div>
                     <div className="text-xs text-zinc-500">
@@ -850,21 +906,21 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
                           <div key={i} className="grid grid-cols-12 items-end gap-2">
                             <div className="col-span-1 flex items-center justify-center">
                               <input type="checkbox" checked={!!row.checked}
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,checked:e.target.checked}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,checked:e.target.checked}:s)}}))}
                               />
                             </div>
 
                             <div className="col-span-3">
                               <Label>{ex.mode === "reps" ? "Reps" : "Seg"}</Label>
                               <Input type="number" inputMode="numeric" value={row.reps} className="text-base"
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,reps:e.target.value}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,reps:e.target.value}:s)}}))}
                               />
                             </div>
 
                             <div className="col-span-3">
                               <Label>Peso ({unit})</Label>
                               <Input type="number" step="0.25" inputMode="decimal" value={row.weight} className="text-base"
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,weight:e.target.value}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,weight:e.target.value}:s)}}))}
                               />
                             </div>
 
@@ -873,7 +929,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
                               <select
                                 className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-base"
                                 value={row.rpe}
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[ex.id]:{...p[ex.id],sets:p[ex.id].sets.map((s,j)=> j===i?{...s,rpe:parseFloat(e.target.value)}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,rpe:parseFloat(e.target.value)}:s)}}))}
                               >
                                 <option value={7}>7 o+ (RIR 3+)</option>
                                 <option value={8}>RPE 8 (RIR 2)</option>
@@ -892,22 +948,22 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
                       <div className="col-span-12 text-xs text-zinc-500">Drop set (última serie):</div>
                       <div className="col-span-3">
                         <Label>{ex.mode === "reps" ? "Reps" : "Seg"}</Label>
-                        <Input type="number" value={st.drop.reps} onChange={(e) => setPerExerciseState((p) => ({ ...p, [ex.id]: { ...p[ex.id], drop: { ...p[ex.id].drop, reps: e.target.value } } }))} />
+                        <Input type="number" value={st.drop.reps} onChange={(e) => setPerExerciseState((p) => ({ ...p, [origEx.id]: { ...p[origEx.id], drop: { ...p[origEx.id].drop, reps: e.target.value } } }))} />
                       </div>
                       <div className="col-span-3">
                         <Label>Peso ({unit})</Label>
-                        <Input type="number" step="0.25" inputMode="decimal" value={st.drop.weight} onChange={(e) => setPerExerciseState((p) => ({ ...p, [ex.id]: { ...p[ex.id], drop: { ...p[ex.id].drop, weight: e.target.value } } }))} />
+                        <Input type="number" step="0.25" inputMode="decimal" value={st.drop.weight} onChange={(e) => setPerExerciseState((p) => ({ ...p, [origEx.id]: { ...p[origEx.id], drop: { ...p[origEx.id].drop, weight: e.target.value } } }))} />
                       </div>
                     </div>
                   )}
 
                   {!st.completed && (
-                  <div className="mt-3 flex items-center justify-between">
-                    <div className="text-xs text-zinc-500">
-                      Marca las series hechas y ajusta reps/peso si cambia
-                      <Button className="ml-2 text-xs" onClick={() => viewAlternative(ex)}>Ver alternativa</Button>
+                  <div className="mt-3">
+                    <div className="mb-2 text-xs text-zinc-500">Marca las series hechas y ajusta reps/peso si cambia</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button className="w-full text-sm" onClick={() => viewAlternative(origEx)}>Ver alternativa</Button>
+                      <Button className="w-full text-sm" onClick={() => registerExercise(origEx)}>Registrar ejercicio</Button>
                     </div>
-                    <Button onClick={() => registerExercise(ex)} className="text-sm">Registrar ejercicio</Button>
                   </div>
                   )}
                 </div>
@@ -991,13 +1047,15 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
   const [editingExId, setEditingExId] = useState(null);
   const [draft, setDraft] = useState(null);
 
+  const list = routines.filter(r => r.exercises.length > 0);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Tus rutinas</h2>
         <Button onClick={addRoutine} className="text-sm"><Plus size={16} className="inline mr-1" /> Nueva</Button>
       </div>
-      {routines.length === 0 && (
+      {list.length === 0 && (
         <Card className="p-4 text-sm text-zinc-500">
           <div className="flex items-center justify-between">
             <span>Aún no tienes rutinas.</span>
@@ -1005,7 +1063,7 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
           </div>
         </Card>
       )}
-      {routines.map((r) => (
+      {list.map((r) => (
         <Card key={r.id} className="p-4">
           <div className="flex items-center justify-between">
             <div>
