@@ -1,33 +1,40 @@
+import { getRoutineBaseDefaults, getExerciseDefaults } from './repoAdapter.js';
+
 export const roundToNearest = (val, step = 1) => Math.round(val / step) * step;
 
 export function getLastUsedSetForExercise(exId, sessions = []) {
-  const sorted = [...(sessions || [])]
-    .filter((s) => s.type === 'strength')
-    .sort((a, b) => new Date(b.dateISO) - new Date(a.dateISO));
-  for (const sess of sorted) {
-    const sets = (sess.sets || []).filter(
-      (st) => st.exerciseId === exId && st.mode === 'reps' && st.weightKg > 0
-    );
-    if (sets.length) {
-      const last = sets[sets.length - 1];
-      return { weightKg: last.weightKg, reps: last.reps, rir: last.rir, dateISO: sess.dateISO };
+  for (let i = 0; i < sessions.length; i++) {
+    const s = sessions[i];
+    if (s?.type !== 'strength') continue;
+    const sets = Array.isArray(s.sets) ? [...s.sets].reverse() : [];
+    for (const st of sets) {
+      if (st.exerciseId === exId && st.mode !== 'time' && Number.isFinite(st.weightKg) && st.weightKg > 0) {
+        return st;
+      }
     }
   }
   return null;
 }
 
-export function getInitialWeightForExercise(exId, data, repo) {
+export function round025(x) {
+  return Math.round(x / 0.25) * 0.25;
+}
+
+export function getInitialWeightForExercise(exId, routineKey, data) {
   const prof = data?.profileByExerciseId?.[exId];
-  let weight = prof?.next?.weightKg;
-  if (weight == null) weight = prof?.last?.weightKg;
-  if (weight == null) {
-    const last = getLastUsedSetForExercise(exId, data?.sessions);
-    weight = last?.weightKg;
-  }
-  if (weight == null) {
-    const ex = repo?.byId?.[exId];
-    weight = ex?.defaults?.initialWeightKg ?? ex?.fixed?.minimumWeightKg;
-  }
-  weight = weight ?? 0;
-  return roundToNearest(weight, 0.25);
+  if (Number.isFinite(prof?.next?.weightKg)) return round025(prof.next.weightKg);
+
+  const routineDefault = getRoutineBaseDefaults(routineKey, exId);
+  if (Number.isFinite(routineDefault)) return round025(routineDefault);
+
+  if (Number.isFinite(prof?.last?.weightKg)) return round025(prof.last.weightKg);
+
+  const lastSet = getLastUsedSetForExercise(exId, data?.sessions || []);
+  if (Number.isFinite(lastSet?.weightKg)) return round025(lastSet.weightKg);
+
+  const exDef = getExerciseDefaults(exId);
+  if (Number.isFinite(exDef.initialWeightKg)) return round025(exDef.initialWeightKg);
+  if (Number.isFinite(exDef.minimumWeightKg)) return round025(exDef.minimumWeightKg);
+
+  return 0;
 }

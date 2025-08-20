@@ -488,7 +488,6 @@ export default function App() {
             weeklyVolume={weeklyVolume}
             lastActionRef={lastActionRef}
             setPrFlash={setPrFlash}
-            repo={repo}
           />
         )}
 
@@ -579,35 +578,27 @@ function tempoSugerido(category, mode) {
   return "controlado";
 }
 
-function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash, repo }) {
+function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash }) {
   const [routineId, setRoutineId] = useState(routines[0]?.id || "");
   useEffect(() => { if (!routineId && routines[0]) setRoutineId(routines[0].id); }, [routines, routineId]);
   const routine = routines.find((r) => r.id === (activeSession?.routineId || routineId));
 
-  const [sessionExercises, setSessionExercises] = useState([]);
   const [perExerciseState, setPerExerciseState] = useState({});
   const [sessionOverrides, setSessionOverrides] = useState({});
   const [openTimerMenu, setOpenTimerMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState({ name: "", sets: "1", reps: "", weight: "" });
 
-  // shape: { [exId]: { sets: [{checked, reps, weight, rpe}], drop?: {reps, weight}, completed: bool } }
+  const routineKey = activeSession?.routineId || routineId;
+  const exIds = useMemo(() => data.userRoutinesIndex?.[routineKey] || [], [data.userRoutinesIndex, routineKey]);
 
   useEffect(() => {
-    if (activeSession && routine) {
-      setSessionExercises(routine.exercises.map(e => ({ ...e })));
-      setPerExerciseState({});
-      setSessionOverrides({});
-    } else {
-      setSessionExercises([]);
-      setPerExerciseState({});
-      setSessionOverrides({});
-    }
-  }, [activeSession, routine]);
+    setPerExerciseState({});
+    setSessionOverrides({});
+  }, [routineKey, activeSession]);
 
   useEffect(() => {
-    if (sessionExercises.length === 0) return;
-    sessionExercises.forEach(ex => {
-      const effectiveId = sessionOverrides[ex.id] || ex.id;
+    exIds.forEach(origId => {
+      const effectiveId = sessionOverrides[origId] || origId;
       if (!data.profileByExerciseId?.[effectiveId]?.last) {
         const last = getLastUsedSetForExercise(effectiveId, data.sessions);
         if (last) {
@@ -618,26 +609,30 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         }
       }
     });
-    setPerExerciseState((prev) => {
+    setPerExerciseState(prev => {
       const copy = { ...prev };
-      for (const ex of sessionExercises) {
-        if (!copy[ex.id]) {
-          const effectiveId = sessionOverrides[ex.id] || ex.id;
-          const resolved = resolveExercise(effectiveId, data.customExercisesById);
-          if (!resolved) continue;
-          const prof = data.profileByExerciseId?.[effectiveId];
-          const baseWeight = kgOrLb(getInitialWeightForExercise(effectiveId, data, repo), unit);
-          const baseReps = resolved.mode === "reps" ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(resolved)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (resolved.targetTimeSec || 45));
-          copy[ex.id] = {
-            sets: Array.from({ length: resolved.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
-            drop: resolved.notes?.toLowerCase().includes("drop") ? { reps: resolved.mode === "reps" ? Math.ceil((resolved.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
+      exIds.forEach((origId, idx) => {
+        const effectiveId = sessionOverrides[origId] || origId;
+        const slotKey = `${routineKey}:${idx}`;
+        const resolved = resolveExercise(effectiveId, data.customExercisesById);
+        if (!resolved) return;
+        const needInit = !copy[slotKey] || copy[slotKey].effectiveExId !== effectiveId;
+        if (needInit) {
+          const baseWKg = getInitialWeightForExercise(effectiveId, routineKey, data);
+          const baseWDisplay = unit === 'lb' ? Math.round(baseWKg * 2.20462 * 4) / 4 : baseWKg;
+          const targetSets = resolved?.fixed?.targetSets || 3;
+          const repOrSec = resolved?.mode === 'reps' ? (resolved?.fixed?.targetReps || 10) : (resolved?.fixed?.targetTimeSec || 45);
+          copy[slotKey] = {
+            sets: Array.from({ length: targetSets }).map(() => ({ checked: false, reps: repOrSec, weight: baseWDisplay, rpe: 8 })),
+            drop: null,
             completed: false,
+            effectiveExId: effectiveId,
           };
         }
-      }
+      });
       return copy;
     });
-  }, [sessionExercises, unit, data.profileByExerciseId, sessionOverrides, data.sessions, repo, data.customExercisesById, setData]);
+  }, [exIds, sessionOverrides, routineKey, unit, data, setData]);
 
   const hasActive = !!activeSession;
   const startSession = () => startStrength(routineId);
@@ -651,16 +646,22 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     if (!Number.isNaN(val)) startRest(val);
   };
 
-  const viewAlternative = (origEx) => {
-    const effectiveId = sessionOverrides[origEx.id] || origEx.id;
+  const viewAlternative = (origId, idx) => {
+    const effectiveId = sessionOverrides[origId] || origId;
     const candidates = suggestAlternativesByExerciseId(effectiveId);
     if (candidates.length === 0) return alert('Sin alternativas disponibles');
     const list = candidates.map((c, i) => `${i + 1}. ${c.name}`).join('\n');
     const pick = prompt(`Alternativas:\n${list}\nNúmero?`);
-    const idx = parseInt(pick || '', 10) - 1;
-    const alt = candidates[idx];
+    const pickIdx = parseInt(pick || '', 10) - 1;
+    const alt = candidates[pickIdx];
     if (!alt) return;
-    setSessionOverrides(prev => ({ ...prev, [origEx.id]: alt.id }));
+    setSessionOverrides(prev => ({ ...prev, [origId]: alt.id }));
+    const slotKey = `${routineKey}:${idx}`;
+    setPerExerciseState(prev => {
+      const next = { ...prev };
+      delete next[slotKey];
+      return next;
+    });
     if (!data.profileByExerciseId?.[alt.id]?.last) {
       const last = getLastUsedSetForExercise(alt.id, data.sessions);
       if (last) {
@@ -670,35 +671,21 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         }));
       }
     }
-    const resolved = resolveExercise(alt.id, data.customExercisesById);
-    if (resolved) {
-      const prof = data.profileByExerciseId?.[alt.id];
-      const baseWeight = kgOrLb(getInitialWeightForExercise(alt.id, data, repo), unit);
-      const baseReps = resolved.mode === 'reps' ? (prof?.next?.reps ?? prof?.last?.reps ?? parseRange(resolved)[0]) : (prof?.next?.reps ?? prof?.last?.reps ?? (resolved.targetTimeSec || 45));
-      setPerExerciseState(p => ({
-        ...p,
-        [origEx.id]: {
-          sets: Array.from({ length: resolved.targetSets || 3 }).map(() => ({ checked: false, reps: baseReps, weight: baseWeight, rpe: 8 })),
-          drop: resolved.notes?.toLowerCase().includes('drop') ? { reps: resolved.mode === 'reps' ? Math.ceil((resolved.targetReps || 10) * 0.6) : 30, weight: baseWeight ? Math.round(baseWeight * 0.8) : 0 } : null,
-          completed: false,
-        },
-      }));
-      setActiveSession(s => s ? ({ ...s, sets: s.sets.filter(set => set.exerciseId !== effectiveId) }) : s);
-      lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
-      setPrFlash('Ejercicio reemplazado');
-      setTimeout(() => setPrFlash(''), 1000);
-    }
+    setActiveSession(s => s ? ({ ...s, sets: s.sets.filter(set => set.exerciseId !== effectiveId) }) : s);
+    lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
+    setPrFlash('Ejercicio reemplazado');
+    setTimeout(() => setPrFlash(''), 1000);
   };
 
-  const registerExercise = (origEx) => {
+  const registerExercise = (origId, idx) => {
     if (!activeSession) return alert("Inicia la sesión primero");
-    const effectiveId = sessionOverrides[origEx.id] || origEx.id;
-    const ex = resolveExercise(effectiveId, data.customExercisesById);
-    const st = perExerciseState[origEx.id];
+    const slotKey = `${routineKey}:${idx}`;
+    const st = perExerciseState[slotKey];
     if (!st) return;
     if (st.completed && !confirm("Ejercicio ya registrado. ¿Registrar nuevamente?")) return;
     if (st.drop && st.sets.some((s) => !s.checked)) return alert("Completa todas las series base antes del drop-set");
-    // push sets
+    const exIdUsed = st.effectiveExId || (sessionOverrides[origId] || origId);
+    const ex = resolveExercise(exIdUsed, data.customExercisesById);
     const newSets = [];
     st.sets.forEach((s) => {
       if (s.checked) {
@@ -707,17 +694,15 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         const wkg = fromDisplayToKg(wDisp, unit);
         const rpe = parseFloat(s.rpe || 8);
         const rir = rpeToRir(rpe);
-        newSets.push({ id: uid(), exerciseId: effectiveId, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe, rir, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now() });
+        newSets.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe, rir, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now() });
       }
     });
     if (st.drop && st.sets.filter((x) => x.checked).length === st.sets.length) {
-      // only if last series completed
       const repsOrSec = parseInt(st.drop.reps || 0, 10);
       const wDisp = roundToNearest(parseFloat(st.drop.weight || 0), 0.25);
       const wkg = fromDisplayToKg(wDisp, unit);
-      newSets.push({ id: uid(), exerciseId: effectiveId, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
+      newSets.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
     }
-    // Drop avanzado configurable (si no hay drop manual configurado en estado)
     if (!st.drop && ex.dropCfg && st.sets.filter((x)=>x.checked).length === st.sets.length) {
       const lastChecked = [...st.sets].reverse().find(s=>s.checked);
       const lastWDisp = roundToNearest(parseFloat(lastChecked?.weight||0), 0.25);
@@ -727,12 +712,11 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
       const baseReps = ex.mode==='reps' ? parseInt(lastChecked?.reps || ex.targetReps || 10, 10) : (ex.targetTimeSec||30);
       const reps = Math.max(1, baseReps + (isNaN(repsOffset) ? 0 : repsOffset));
       const wkg = Math.max(0, Math.round((lastW * percent/100) * 10)/10);
-      newSets.push({ id: uid(), exerciseId: effectiveId, mode: ex.mode, reps, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
+      newSets.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
     }
     if (newSets.length === 0) return alert("Marca al menos una serie");
 
-    // PR detection vs previous
-    const bestE1 = bestE1RMForExercise(activeSession, data.sessions, effectiveId);
+    const bestE1 = bestE1RMForExercise(activeSession, data.sessions, exIdUsed);
     let raised = false;
     for (const n of newSets) {
       if (n.mode !== "time") {
@@ -744,31 +728,30 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
     const lastValid = [...newSets].reverse().find(s => !s.drop);
     if (lastValid) {
-      const prevProf = data.profileByExerciseId?.[effectiveId] || {};
+      const prevProf = data.profileByExerciseId?.[exIdUsed] || {};
       const last = { weightKg: lastValid.weightKg, reps: lastValid.reps, rir: lastValid.rir, dateISO: todayISO(), setup: prevProf.last?.setup };
       const next = calcNext({ last, ex, profile: prevProf });
-      setData(d => ({ ...d, profileByExerciseId: { ...d.profileByExerciseId, [effectiveId]: { ...prevProf, last, next } } }));
+      setData(d => ({ ...d, profileByExerciseId: { ...d.profileByExerciseId, [exIdUsed]: { ...prevProf, last, next } } }));
     }
     const wasCompleted = st.completed;
     lastActionRef.current = {
-      exId: origEx.id,
+      exId: slotKey,
       added: newSets.length,
       prevCompleted: wasCompleted,
-      undo: () => setPerExerciseState(p => ({ ...p, [origEx.id]: { ...p[origEx.id], completed: wasCompleted } }))
+      undo: () => setPerExerciseState(p => ({ ...p, [slotKey]: { ...p[slotKey], completed: wasCompleted } }))
     };
-    setPerExerciseState((p) => ({ ...p, [origEx.id]: { ...p[origEx.id], completed: true } }));
+    setPerExerciseState((p) => ({ ...p, [slotKey]: { ...p[slotKey], completed: true } }));
     setPrFlash('Ejercicio registrado');
     setTimeout(() => { setPrFlash(''); lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null }; }, 1000);
 
-    // no auto-start de descanso aquí
-
     if (raised) setTimeout(() => flashPR("PR 1RM estimada"), 1000);
 
-    // Superserie/Triserie: aviso y descanso compartido implícito
     if (ex.groupId) {
-      const mates = sessionExercises.filter(e=> e.groupId===ex.groupId && e.id!==ex.id);
+      const mates = exIds
+        .map((oid, j) => ({ ex: resolveExercise(sessionOverrides[oid] || oid, data.customExercisesById), idx: j }))
+        .filter(o => o.ex && o.ex.groupId === ex.groupId && o.idx !== idx);
       setTimeout(() => {
-        setPrFlash(`Superserie: ahora ${mates[0]?.name || 'siguiente del grupo'}`);
+        setPrFlash(`Superserie: ahora ${mates[0]?.ex.name || 'siguiente del grupo'}`);
         setTimeout(() => setPrFlash(''), 1000);
       }, 1000);
     }
@@ -865,10 +848,11 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
 
         {hasActive && routine && (
           <div className="mt-3 space-y-3">
-            {sessionExercises.map((origEx, idx) => {
-              const effectiveId = sessionOverrides[origEx.id] || origEx.id;
+            {exIds.map((origId, idx) => {
+              const effectiveId = sessionOverrides[origId] || origId;
               const ex = resolveExercise(effectiveId, data.customExercisesById);
-              const st = perExerciseState[origEx.id] || { sets: [] };
+              const slotKey = `${routineKey}:${idx}`;
+              const st = perExerciseState[slotKey] || { sets: [] };
               const prof = data.profileByExerciseId?.[effectiveId];
               let suggestion = "";
               if (prof?.next) {
@@ -886,11 +870,11 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
               if (ex.seatHeightMark > 0) setupParts.push(`Asiento ${ex.seatHeightMark}`);
               const setupText = setupParts.length ? ` · ${setupParts.join(' · ')}` : "";
               return (
-                <div key={origEx.id} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
+                <div key={`${slotKey}:${effectiveId}`} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
                   <div className="mb-1">
                     <div className="text-base font-semibold leading-tight">{idx + 1}. {ex.name}</div>
                     <div className="text-xs text-zinc-500">
-                      {ex.targetSets}×{ex.mode === "reps" ? (ex.targetRepsRange) : (ex.targetRepsRange || `${ex.targetTimeSec}s`)}
+                      {(ex.fixed?.targetSets || ex.targetSets)}×{ex.mode === "reps" ? (ex.fixed?.targetRepsRange || ex.targetRepsRange) : (ex.fixed?.targetRepsRange || `${ex.fixed?.targetTimeSec || ex.targetTimeSec}s`)}
                       {suggestion ? ` · Sugerencia ${suggestion}` : ""}
                       {ex.restSec ? ` · ${ex.restSec}s` : ""}
                       {` · Tempo: ${tempoSugerido(ex.category, ex.mode)}`}
@@ -906,21 +890,21 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
                           <div key={i} className="grid grid-cols-12 items-end gap-2">
                             <div className="col-span-1 flex items-center justify-center">
                               <input type="checkbox" checked={!!row.checked}
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,checked:e.target.checked}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[slotKey]:{...p[slotKey],sets:p[slotKey].sets.map((s,j)=> j===i?{...s,checked:e.target.checked}:s)}}))}
                               />
                             </div>
 
                             <div className="col-span-3">
                               <Label>{ex.mode === "reps" ? "Reps" : "Seg"}</Label>
                               <Input type="number" inputMode="numeric" value={row.reps} className="text-base"
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,reps:e.target.value}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[slotKey]:{...p[slotKey],sets:p[slotKey].sets.map((s,j)=> j===i?{...s,reps:e.target.value}:s)}}))}
                               />
                             </div>
 
                             <div className="col-span-3">
                               <Label>Peso ({unit})</Label>
                               <Input type="number" step="0.25" inputMode="decimal" value={row.weight} className="text-base"
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,weight:e.target.value}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[slotKey]:{...p[slotKey],sets:p[slotKey].sets.map((s,j)=> j===i?{...s,weight:e.target.value}:s)}}))}
                               />
                             </div>
 
@@ -929,7 +913,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
                               <select
                                 className="w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-base"
                                 value={row.rpe}
-                                onChange={(e)=> setPerExerciseState(p=>({...p,[origEx.id]:{...p[origEx.id],sets:p[origEx.id].sets.map((s,j)=> j===i?{...s,rpe:parseFloat(e.target.value)}:s)}}))}
+                                onChange={(e)=> setPerExerciseState(p=>({...p,[slotKey]:{...p[slotKey],sets:p[slotKey].sets.map((s,j)=> j===i?{...s,rpe:parseFloat(e.target.value)}:s)}}))}
                               >
                                 <option value={7}>7 o+ (RIR 3+)</option>
                                 <option value={8}>RPE 8 (RIR 2)</option>
@@ -948,11 +932,11 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
                       <div className="col-span-12 text-xs text-zinc-500">Drop set (última serie):</div>
                       <div className="col-span-3">
                         <Label>{ex.mode === "reps" ? "Reps" : "Seg"}</Label>
-                        <Input type="number" value={st.drop.reps} onChange={(e) => setPerExerciseState((p) => ({ ...p, [origEx.id]: { ...p[origEx.id], drop: { ...p[origEx.id].drop, reps: e.target.value } } }))} />
+                          <Input type="number" value={st.drop.reps} onChange={(e) => setPerExerciseState((p) => ({ ...p, [slotKey]: { ...p[slotKey], drop: { ...p[slotKey].drop, reps: e.target.value } } }))} />
                       </div>
                       <div className="col-span-3">
                         <Label>Peso ({unit})</Label>
-                        <Input type="number" step="0.25" inputMode="decimal" value={st.drop.weight} onChange={(e) => setPerExerciseState((p) => ({ ...p, [origEx.id]: { ...p[origEx.id], drop: { ...p[origEx.id].drop, weight: e.target.value } } }))} />
+                          <Input type="number" step="0.25" inputMode="decimal" value={st.drop.weight} onChange={(e) => setPerExerciseState((p) => ({ ...p, [slotKey]: { ...p[slotKey], drop: { ...p[slotKey].drop, weight: e.target.value } } }))} />
                       </div>
                     </div>
                   )}
@@ -961,8 +945,8 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
                   <div className="mt-3">
                     <div className="mb-2 text-xs text-zinc-500">Marca las series hechas y ajusta reps/peso si cambia</div>
                     <div className="grid grid-cols-2 gap-2">
-                      <Button className="w-full text-sm" onClick={() => viewAlternative(origEx)}>Ver alternativa</Button>
-                      <Button className="w-full text-sm" onClick={() => registerExercise(origEx)}>Registrar ejercicio</Button>
+                      <Button className="w-full text-sm" onClick={() => viewAlternative(origId, idx)}>Ver alternativa</Button>
+                      <Button className="w-full text-sm" onClick={() => registerExercise(origId, idx)}>Registrar ejercicio</Button>
                     </div>
                   </div>
                   )}
