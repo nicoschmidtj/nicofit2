@@ -1,4 +1,4 @@
-import repo from '../data/exercisesRepo.json';
+import repo from '../data/exercisesRepo.json' assert { type: 'json' };
 
 /**
  * Devuelve un objeto { [routineKey]: string[] } clonado desde repo.routinesIndex.
