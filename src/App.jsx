@@ -2,13 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
 import { migrateToTemplates } from "./lib/migrations.js";
-import { getTemplateRoutineName, suggestAlternativesByExerciseId, primaryGroup, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
+import { getTemplateRoutineName, suggestAlternativesByExerciseId, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
 import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
-import repo from "./data/exercisesRepo.json";
 import { freqDaysByGroup, heatmapWeekGroup, buildPerExerciseHistory, validSet } from "./lib/analytics.js";
 
+const repo = loadRepo();
 // =====================================
 // NicoFit — single-file React app (v1.6)
 // - Fix: SyntaxError around previous edits by fully rewriting valid React code
@@ -208,7 +208,6 @@ export default function App() {
   const lastActionRef = useRef({ exId: null, added: 0, prevCompleted: false });
   const restoredRef = useRef(false);
   const beep = useBeep();
-  const repo = useMemo(() => loadRepo(), []);
 
   useEffect(() => save(data), [data]);
   // Autoguardado de sesión activa (restaurar solo una vez al montar)
@@ -569,6 +568,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
   useEffect(() => { if (!selectedRoutineKey && routines[0]) setSelectedRoutineKey(routines[0].id); }, [routines, selectedRoutineKey]);
   const routineKey = activeSession?.routineKey || selectedRoutineKey;
   const routine = routines.find((r) => r.id === routineKey);
+  const { customExercisesById, profileByExerciseId, sessions } = data;
 
   const [perExerciseState, setPerExerciseState] = useState({});
   const [sessionOverridesBySlot, setSessionOverridesBySlot] = useState({});
@@ -586,11 +586,11 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     exIds.forEach((origId, idx) => {
       const slotKey = `${routineKey}:${idx}`;
       const effectiveId = sessionOverridesBySlot[slotKey] || origId;
-      const resolved = resolveExercise(effectiveId, data.customExercisesById);
+      const resolved = resolveExercise(effectiveId, customExercisesById);
       if (!resolved) return;
       setPerExerciseState(prev => {
         if (prev[slotKey]) return prev;
-        const baseWKg = getInitialWeightForExercise(effectiveId, routineKey, data);
+        const baseWKg = getInitialWeightForExercise(effectiveId, routineKey, { profileByExerciseId, sessions });
         const baseW = unit === 'lb' ? Math.round(baseWKg * 2.20462 * 4) / 4 : baseWKg;
         const targetSets = resolved?.fixed?.targetSets || 3;
         const repOrSec = resolved?.mode === 'reps' ? (resolved?.fixed?.targetReps || 10) : (resolved?.fixed?.targetTimeSec || 45);
@@ -607,7 +607,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         };
       });
     });
-  }, [exIds, sessionOverridesBySlot, routineKey, unit, activeSession?.id]);
+  }, [exIds, sessionOverridesBySlot, routineKey, unit, activeSession?.id, customExercisesById, profileByExerciseId, sessions]);
 
   const hasActive = !!activeSession;
   const startSession = () => startStrength(selectedRoutineKey);
