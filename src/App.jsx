@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
-import { migrateToTemplates } from "./lib/migrations.js";
+import { migrate } from "./lib/migrations.ts";
+import { dataSchema } from "./lib/schema.ts";
 import { getTemplateRoutineName, suggestAlternativesByExerciseId, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
 import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
@@ -119,7 +120,10 @@ const LS_KEY = "nicofit_data_v5";
 const loadFromLS = () => {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : DEFAULT_DATA;
+    const parsed = raw ? JSON.parse(raw) : DEFAULT_DATA;
+    const { state, warnings } = migrate(parsed);
+    warnings.forEach(w => console.warn('migration:', w));
+    return state;
   } catch (e) {
     console.warn("Load failed, using defaults", e);
     return DEFAULT_DATA;
@@ -179,8 +183,7 @@ const TABS = [
 export default function App() {
   const [data, setData] = useState(() => {
     const initial = loadFromLS();
-    const migrated = migrateToTemplates(initial);
-    const merged = { ...DEFAULT_DATA, ...migrated };
+    const merged = { ...DEFAULT_DATA, ...initial };
     if (merged.userRoutinesIndex?.extra1?.length === 0) {
       delete merged.userRoutinesIndex.extra1;
       if (merged.customRoutineNames) delete merged.customRoutineNames.extra1;
@@ -1429,6 +1432,23 @@ function SettingsTab({ data, setData }) {
     alert("Export no disponible en este entorno. Copia manual desde la consola.");
   };
 
+  const sanitizeImported = (data) => {
+    const keys = new Set(['name', 'notes', 'exerciseName', 'setup']);
+    const walk = (val) => {
+      if (Array.isArray(val)) val.forEach(walk);
+      else if (val && typeof val === 'object') {
+        Object.keys(val).forEach(k => {
+          const v = val[k];
+          if (typeof v === 'string' && keys.has(k)) val[k] = escapeHtml(v);
+          else walk(v);
+        });
+      }
+    };
+    const clone = structuredClone(data);
+    walk(clone);
+    return clone;
+  };
+
   const onImport = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -1436,12 +1456,16 @@ function SettingsTab({ data, setData }) {
     reader.onload = () => {
       try {
         const obj = JSON.parse(reader.result);
-        if (!obj.settings || !obj.routines || !obj.sessions) throw new Error("Archivo inválido");
-        setData(obj);
-        setFileErr("");
-        alert("Datos importados ✔");
-      } catch {
-        setFileErr("No se pudo importar (JSON inválido)");
+        const parsed = dataSchema.safeParse(obj);
+        if (!parsed.success) throw new Error('invalid');
+        const { state } = migrate(parsed.data);
+        const sanitized = sanitizeImported(state);
+        setData(sanitized);
+        setFileErr('');
+        alert('Datos importados ✔');
+      } catch (err) {
+        console.warn(err);
+        setFileErr('No se pudo importar (JSON inválido)');
       }
     };
     reader.readAsText(f);
