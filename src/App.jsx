@@ -542,13 +542,23 @@ export default function App() {
 
 function Nav({ tab, setTab }) {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 border-t border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/80 backdrop-blur">
+    <nav
+      className="fixed bottom-0 left-0 right-0 border-t border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-950/80 backdrop-blur"
+      role="tablist"
+    >
       <div className="max-w-md mx-auto grid grid-cols-4">
         {TABS.map((t) => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={`flex flex-col items-center gap-1 py-3 ${tab === t.id ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-500"}`}>
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`flex flex-col items-center gap-1 py-3 ${tab === t.id ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-500"}`}
+            role="tab"
+            aria-selected={tab === t.id}
+            aria-label={t.label}
+          >
             {t.icon}
             <span className="text-[11px]">{t.label}</span>
-        </button>
+          </button>
         ))}
       </div>
     </nav>
