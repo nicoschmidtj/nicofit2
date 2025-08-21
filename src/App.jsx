@@ -6,6 +6,8 @@ import { getTemplateRoutineName, suggestAlternativesByExerciseId, primaryGroup, 
 import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
+import repo from "./data/exercisesRepo.json";
+import { freqDaysByGroup, heatmapWeekGroup, buildPerExerciseHistory, validSet } from "./lib/analytics.js";
 
 // =====================================
 // NicoFit — single-file React app (v1.6)
@@ -427,31 +429,15 @@ export default function App() {
   };
 
   // ---------- Analytics ----------
-  const perExerciseHistory = useMemo(() => {
-    const map = new Map();
-    for (const s of sessions.filter((x) => x.type === "strength")) {
-      for (const set of s.sets) {
-        const key = set.exerciseId;
-        const ex = routines.flatMap((r) => r.exercises).find((e) => e.id === key);
-        const exName = ex ? ex.name : (set.exerciseName || null);
-        if (!exName) continue;
-        const date = s.dateISO.slice(0, 10);
-        const entry = { date, exerciseId: key, exercise: exName, volume: set.mode === "time" ? 0 : set.reps * set.weightKg, oneRM: set.mode === "time" ? 0 : epley1RM(set.weightKg, set.reps) };
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push(entry);
-      }
+  const exercisesById = useMemo(() => {
+    const out = { ...(repo?.byId || {}) };
+    for (const r of routines) {
+      for (const ex of r.exercises) out[ex.id] = { ...(out[ex.id] || {}), ...ex };
     }
-    for (const [k, arr] of map.entries()) {
-      const byDay = {};
-      for (const it of arr) {
-        if (!byDay[it.date]) byDay[it.date] = { date: it.date, exerciseId: it.exerciseId, exercise: it.exercise, volume: 0, oneRM: 0 };
-        byDay[it.date].volume += it.volume;
-        byDay[it.date].oneRM = Math.max(byDay[it.date].oneRM, it.oneRM);
-      }
-      map.set(k, Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date)));
-    }
-    return map;
-  }, [sessions, routines]);
+    return out;
+  }, [routines]);
+
+  const perExerciseHistory = useMemo(() => buildPerExerciseHistory(sessions, exercisesById), [sessions, exercisesById]);
 
   const weeklyVolume = useMemo(() => computeWeeklyVolume(sessions), [sessions]);
 
@@ -504,7 +490,7 @@ export default function App() {
         )}
 
         {tab === "history" && (
-          <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} />
+          <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} />
         )}
 
         {tab === "settings" && (
@@ -1146,7 +1132,7 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
   );
 }
 
-function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit, deleteSession, setTab }) {
+function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit, deleteSession, setTab, exercisesById }) {
   const [exId, setExId] = useState("");
   const [range, setRange] = useState('30'); // días: '30' | '90' | '180'
   const [routineFilter, setRoutineFilter] = useState('all'); // 'all' | routineKey
@@ -1179,27 +1165,43 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
     }
     return prs;
   }, [sessions, routineFilter]);
-  const topE1RM = useMemo(()=> {
-    const since = Date.now() - 30*24*3600*1000;
-    const best = new Map();
-    for (const s of sessions.filter(x=>x.type==='strength' && new Date(x.dateISO).getTime()>=since)) {
-      for (const st of s.sets||[]) {
-        if (st.mode==='time') continue;
-        const e1 = epley1RM(st.weightKg, st.reps);
-        best.set(st.exerciseId, Math.max(best.get(st.exerciseId)||0, e1));
-      }
-    }
-    return [...best.entries()]
-      .map(([id, oneRM])=>({ id, oneRM, name: (routines.flatMap(r=>r.exercises).find(e=>e.id===id)||{}).name||'Ejercicio' }))
-      .sort((a,b)=>b.oneRM-a.oneRM)
-      .slice(0,5);
-  }, [sessions, routines]);
 
   const chartData = (perExerciseHistory.get(exId) || []);
   const weekly8 = (weeklyVolume || []).slice(-(8));
-  const distrib = useMemo(()=> distributionPorGrupo(sessions, routines, days, routineFilter), [sessions, routines, days, routineFilter]);
-  const weeklyStack = useMemo(()=> volumenSemanalApilado(sessions, routines, Math.min(8, Math.ceil(days/7)), routineFilter), [sessions, routines, days, routineFilter]);
+  const freq = useMemo(() => {
+    const to = new Date();
+    const from = new Date(to.getTime() - days*24*3600*1000);
+    return freqDaysByGroup(sessions, repo, {from, to, routineFilter: routineFilter==='all'? undefined : routineFilter});
+  }, [sessions, days, routineFilter]);
+  const freqClean = useMemo(() => freq.filter(f=>Number.isFinite(f.days) && f.days>0), [freq]);
+  const hmap = useMemo(() => {
+    const to = new Date();
+    const from = new Date(to.getTime() - days*24*3600*1000);
+    return heatmapWeekGroup(sessions, repo, {from, to, routineFilter: routineFilter==='all'? undefined : routineFilter});
+  }, [sessions, days, routineFilter]);
   const prs = useMemo(()=> prsRecientes(sessions, routines, days, routineFilter), [sessions, routines, days, routineFilter]);
+  const topE1RM = useMemo(()=> {
+    const to = new Date();
+    const from = new Date(to.getTime() - days*24*3600*1000);
+    const best = new Map();
+    for (const s of sessions) {
+      if (s.type !== 'strength') continue;
+      const d = new Date(s.dateISO);
+      if (d < from || d > to) continue;
+      if (routineFilter !== 'all' && s.routineKey !== routineFilter) continue;
+      for (const st of s.sets || []) {
+        if (!validSet(st)) continue;
+        const e1 = Math.round(st.weightKg * (1 + st.reps/30));
+        const prev = best.get(st.exerciseId) || 0;
+        if (e1 > prev) best.set(st.exerciseId, e1);
+      }
+    }
+    return [...best.entries()].map(([id, oneRM]) => ({ id, oneRM, name: exercisesById[id]?.name || 'Ejercicio' }))
+      .filter(r => Number.isFinite(r.oneRM) && r.oneRM > 0)
+      .sort((a,b)=>b.oneRM - a.oneRM)
+      .slice(0,5);
+  }, [sessions, days, routineFilter, exercisesById]);
+
 
   return (
     <div className="space-y-4">
@@ -1235,43 +1237,37 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
         </div>
       </Card>
 
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Distribución por grupo</h2>
-        <div className="h-48">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie data={distrib} dataKey="volume" nameKey="group" labelLine={false} label={({percent}) => `${Math.round(percent*100)}%`}>
-                {distrib.map((d) => (
-                  <Cell key={d.group} fill={GROUP_COLORS[d.group]} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(v) => `${Math.round(v)} kg·rep`} />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
 
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Volumen semanal por grupo</h2>
-        <div className="h-48">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={weeklyStack}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="week" hide />
-              <Tooltip formatter={(v) => `${Math.round(v)} kg·rep`} />
-              <Legend />
-              <Bar dataKey="pecho" fill={GROUP_COLORS.pecho} stackId="a" />
-              <Bar dataKey="espalda" fill={GROUP_COLORS.espalda} stackId="a" />
-              <Bar dataKey="pierna" fill={GROUP_COLORS.pierna} stackId="a" />
-              <Bar dataKey="hombro" fill={GROUP_COLORS.hombro} stackId="a" />
-              <Bar dataKey="brazo" fill={GROUP_COLORS.brazo} stackId="a" />
-              <Bar dataKey="core" fill={GROUP_COLORS.core} stackId="a" />
-              <Bar dataKey="otros" fill={GROUP_COLORS.otros} stackId="a" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
+        <Card className="p-4">
+          <h2 className="text-lg font-semibold mb-2">Frecuencia por grupo (días)</h2>
+          {freqClean.length === 0 ? (
+            <div className="h-48 flex items-center justify-center text-sm text-zinc-500">Sin datos en este rango</div>
+          ) : (
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={freqClean} dataKey="days" nameKey="group" labelLine={false} label={({percent}) => `${Math.round(percent*100)}%`}>
+                    {freqClean.map((d) => (
+                      <Cell key={d.group} fill={GROUP_COLORS[d.group]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v, name, props) => `${props?.payload?.group} — ${v} días`} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-4">
+          <h2 className="text-lg font-semibold mb-2">Volumen semanal por grupo</h2>
+          {hmap.weeks.length === 0 || hmap.groups.length === 0 ? (
+            <div className="h-48 flex items-center justify-center text-sm text-zinc-500">Sin datos en este rango</div>
+          ) : (
+            <HeatmapWeekGroup data={hmap} />
+          )}
+        </Card>
+
 
       <Card className="p-4">
         <h2 className="text-lg font-semibold mb-2">PRs recientes</h2>
@@ -1306,7 +1302,7 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
         </div>
 
         <div className="mt-3">
-          <h3 className="text-sm font-medium mb-1">Top 5 e1RM (30 días)</h3>
+          <h3 className="text-sm font-medium mb-1">Top 5 e1RM ({range}d)</h3>
           <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 divide-y">
             {topE1RM.map((row)=>(
               <div key={row.id} className="flex justify-between px-3 py-2 text-sm">
@@ -1342,29 +1338,39 @@ function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit
         </div>
       </Card>
 
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Top 5 e1RM (30 días)</h2>
-        {(() => {
-          const topE1 = (()=>{
-            const since = Date.now()-30*24*3600*1000;
-            const best = new Map();
-            for (const s of sessions.filter(x=>x.type==='strength' && new Date(x.dateISO).getTime()>=since)) {
-              for (const st of s.sets||[]) {
-                if (st.mode==='time') continue;
-                best.set(st.exerciseId, Math.max(best.get(st.exerciseId)||0, epley1RM(st.weightKg, st.reps)));
-              }
-            }
-            return [...best.entries()].map(([id,val])=>({ id, name:(routines.flatMap(r=>r.exercises).find(e=>e.id===id)||{}).name||'Ejercicio', val }))
-              .sort((a,b)=> b.val-a.val).slice(0,5);
-          })();
-          return (
-            <>
-              {topE1.map(r=> <div key={r.id} className="flex justify-between py-1 text-sm"><span className="truncate">{r.name}</span><span className="tabular-nums">{kgOrLb(r.val, unit)} {unit}</span></div>)}
-              {topE1.length===0 && <div className="text-sm text-zinc-500">Sin datos aún.</div>}
-            </>
-          )
-        })()}
-      </Card>
+
+        <Card className="p-4">
+          <h2 className="text-lg font-semibold mb-2">Top 5 e1RM ({range}d)</h2>
+          {topE1RM.map(r => (
+            <div key={r.id} className="flex justify-between py-1 text-sm"><span className="truncate">{r.name}</span><span className="tabular-nums">{kgOrLb(r.oneRM, unit)} {unit}</span></div>
+          ))}
+          {topE1RM.length===0 && <div className="text-sm text-zinc-500">Sin datos aún.</div>}
+        </Card>
+
+    </div>
+  );
+}
+
+
+function HeatmapWeekGroup({ data }) {
+  const { weeks, groups, values } = data;
+  const max = Math.max(0, ...weeks.flatMap(w => groups.map(g => values[w][g])));
+  return (
+    <div className="h-48 overflow-hidden">
+      <div className="flex">
+        <div className="flex flex-col text-[10px] mr-1">
+          {groups.map(g => (<div key={g} className="flex-1 flex items-center justify-end pr-1">{g}</div>))}
+        </div>
+        <div className="flex-1">
+          <div className="grid gap-px" style={{gridTemplateColumns:`repeat(${weeks.length},1fr)`,gridTemplateRows:`repeat(${groups.length},1fr)`}}>
+            {groups.map(g => weeks.map(w => {
+              const v = values[w][g];
+              const op = max ? v / max : 0;
+              return <div key={g+'-'+w} className="w-full h-full" style={{backgroundColor:`rgba(59,130,246,${op})`}} aria-label={`${g}, semana ${w}: ${v} días`} title={`${g}, semana ${w}: ${v} días`}></div>;
+            }))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1558,50 +1564,7 @@ function computeWeeklyVolume(sessions) {
 }
 
 // Distribución de volumen por grupo muscular en ventana de "days" días
-function distributionPorGrupo(sessions, routines, days = 30, routineKey = 'all') {
-  const exGroup = new Map();
-  for (const r of routines) {
-    for (const ex of r.exercises) exGroup.set(ex.id, primaryGroup(ex) || 'otros');
-  }
-  const since = Date.now() - days * 24 * 3600 * 1000;
-  const res = { pecho: 0, espalda: 0, pierna: 0, hombro: 0, brazo: 0, core: 0, otros: 0 };
-  for (const s of sessions) {
-    if (s.type !== 'strength') continue;
-    if (routineKey !== 'all' && s.routineKey !== routineKey) continue;
-    if (new Date(s.dateISO).getTime() < since) continue;
-    for (const st of s.sets || []) {
-      if (st.mode === 'time') continue;
-      const g = exGroup.get(st.exerciseId) || 'otros';
-      res[g] += (st.weightKg || 0) * (st.reps || 0);
-    }
-  }
-  return Object.entries(res).map(([group, volume]) => ({ group, volume }));
-}
-
 // Volumen semanal apilado por grupo muscular
-function volumenSemanalApilado(sessions, routines, weeks = 8, routineKey = 'all') {
-  const exGroup = new Map();
-  for (const r of routines) {
-    for (const ex of r.exercises) exGroup.set(ex.id, primaryGroup(ex) || 'otros');
-  }
-  const since = Date.now() - weeks * 7 * 24 * 3600 * 1000;
-  const out = {};
-  for (const s of sessions) {
-    if (s.type !== 'strength') continue;
-    if (routineKey !== 'all' && s.routineKey !== routineKey) continue;
-    const d = new Date(s.dateISO);
-    if (d.getTime() < since) continue;
-    const wk = `${d.getUTCFullYear()}-W${weekNumber(d)}`;
-    if (!out[wk]) out[wk] = { week: wk, pecho:0, espalda:0, pierna:0, hombro:0, brazo:0, core:0, otros:0 };
-    for (const st of s.sets || []) {
-      if (st.mode === 'time') continue;
-      const g = exGroup.get(st.exerciseId) || 'otros';
-      out[wk][g] += (st.weightKg || 0) * (st.reps || 0);
-    }
-  }
-  return Object.values(out).sort((a,b)=> a.week.localeCompare(b.week)).slice(-weeks);
-}
-
 // Lista de PRs recientes (e1RM, volumen, reps) en ventana de "days" días
 function prsRecientes(sessions, routines, days = 30, routineKey = 'all') {
   const exName = new Map();
