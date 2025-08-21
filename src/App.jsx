@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, Download, Upload, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend, PieChart, Pie, Cell } from "recharts";
+import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
+import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { migrate } from "./lib/migrations.ts";
 import { dataSchema } from "./lib/schema.ts";
 import { getTemplateRoutineName, suggestAlternativesByExerciseId, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
 import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
-import { freqDaysByGroup, heatmapWeekGroup, buildPerExerciseHistory, validSet } from "./lib/analytics.js";
+import { Card, Button, IconButton, Input, Label } from "./ui.jsx";
+import { buildPerExerciseHistory } from "./lib/analytics.js";
 
 const repo = loadRepo();
 // =====================================
@@ -40,7 +41,6 @@ const rpeToRir = (rpe) => {
   if (x >= 8) return 2;
   return 3;
 };
-const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // Auto-progresión helpers
 const LOAD_STEP_KG = 2.5;
@@ -96,7 +96,6 @@ const IMPLEMENT_FROM_NAME = (name='')=>{
   return 'otros';
 };
 
-const GROUP_COLORS = { pecho:'#EF4444', espalda:'#3B82F6', pierna:'#10B981', hombro:'#F59E0B', brazo:'#8B5CF6', core:'#06B6D4', otros:'#9CA3AF' };
 
 // ---------- Default dataset ----------
 const DEFAULT_DATA = {
@@ -158,19 +157,6 @@ const useBeep = () => {
   };
 };
 
-// ---------- UI primitives ----------
-const Card = ({ className = "", children }) => (
-  <div className={`rounded-3xl shadow-lg bg-white/70 dark:bg-zinc-900/60 backdrop-blur border border-zinc-200/60 dark:border-zinc-800 ${className}`}>{children}</div>
-);
-const Button = ({ className = "", children, onClick, type = "button", disabled }) => (
-  <button type={type} disabled={disabled} onClick={onClick} className={`px-4 py-2 rounded-2xl shadow-sm transition active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 ${className}`}>{children}</button>
-);
-const IconButton = ({ children, onClick, className = "", title }) => (
-  <button aria-label={title} onClick={onClick} title={title} className={`p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition ${className}`}>{children}</button>
-);
-const Input = (props) => <input {...props} className={`w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 outline-none focus:ring-2 ring-zinc-300 dark:ring-zinc-600 ${props.className || ""}`} />;
-const Label = ({ children }) => <label className="text-sm text-zinc-600 dark:text-zinc-400">{children}</label>;
-
 // ---------- Tabs ----------
 const TABS = [
   { id: "today", label: "Hoy", icon: <Dumbbell size={18} /> },
@@ -178,6 +164,9 @@ const TABS = [
   { id: "history", label: "Historial", icon: <History size={18} /> },
   { id: "settings", label: "Ajustes", icon: <SettingsIcon size={18} /> },
 ];
+
+const HistoryTab = React.lazy(() => import("./HistoryTab"));
+const SettingsTab = React.lazy(() => import("./SettingsTab"));
 
 // ---------- Main App ----------
 export default function App() {
@@ -492,11 +481,15 @@ export default function App() {
         )}
 
         {tab === "history" && (
-          <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} />
+          <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
+            <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} />
+          </Suspense>
         )}
 
         {tab === "settings" && (
-          <SettingsTab data={data} setData={setData} />
+          <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
+            <SettingsTab data={data} setData={setData} />
+          </Suspense>
         )}
       </div>
 
@@ -1145,438 +1138,6 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
   );
 }
 
-function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit, deleteSession, setTab, exercisesById }) {
-  const [exId, setExId] = useState("");
-  const [range, setRange] = useState('30'); // días: '30' | '90' | '180'
-  const [routineFilter, setRoutineFilter] = useState('all'); // 'all' | routineKey
-  const allExercises = routines.flatMap((r) => r.exercises);
-  useEffect(() => { if (!exId && allExercises[0]) setExId(allExercises[0].id); }, [allExercises, exId]);
-
-  const days = parseInt(range, 10);
-  const filteredSessions = useMemo(()=>{
-    const since = Date.now() - days*24*3600*1000;
-    return sessions.filter(s=> new Date(s.dateISO).getTime() >= since && s.type==='strength' && (routineFilter==='all' || s.routineKey===routineFilter));
-  }, [sessions, days, routineFilter]);
-  const totalSesiones = filteredSessions.length;
-  const volumen4Semanas = useMemo(()=> {
-    const since = Date.now() - 28*24*3600*1000;
-    return sessions.filter(s=> s.type==='strength' && new Date(s.dateISO).getTime()>=since && (routineFilter==='all' || s.routineKey===routineFilter))
-      .reduce((a,s)=> a + (s.totalVolume||0), 0);
-  }, [sessions, routineFilter]);
-  const prsUltimas4 = useMemo(()=> {
-    const best = new Map();
-    let prs=0;
-    const since = Date.now() - 28*24*3600*1000;
-    for (const s of sessions.filter(x=>x.type==='strength' && (routineFilter==='all' || x.routineKey===routineFilter))) {
-      for (const st of s.sets||[]) {
-        if (st.mode==='time') continue;
-        const e1 = epley1RM(st.weightKg, st.reps);
-        const b = best.get(st.exerciseId)||0;
-        if (e1 > b && new Date(s.dateISO).getTime()>=since) prs++;
-        best.set(st.exerciseId, Math.max(b, e1));
-      }
-    }
-    return prs;
-  }, [sessions, routineFilter]);
-
-  const chartData = (perExerciseHistory.get(exId) || []);
-  const weekly8 = (weeklyVolume || []).slice(-(8));
-  const freq = useMemo(() => {
-    const to = new Date();
-    const from = new Date(to.getTime() - days*24*3600*1000);
-    return freqDaysByGroup(sessions, repo, {from, to, routineFilter: routineFilter==='all'? undefined : routineFilter});
-  }, [sessions, days, routineFilter]);
-  const freqClean = useMemo(() => freq.filter(f=>Number.isFinite(f.days) && f.days>0), [freq]);
-  const hmap = useMemo(() => {
-    const to = new Date();
-    const from = new Date(to.getTime() - days*24*3600*1000);
-    return heatmapWeekGroup(sessions, repo, {from, to, routineFilter: routineFilter==='all'? undefined : routineFilter});
-  }, [sessions, days, routineFilter]);
-  const prs = useMemo(()=> prsRecientes(sessions, routines, days, routineFilter), [sessions, routines, days, routineFilter]);
-  const topE1RM = useMemo(()=> {
-    const to = new Date();
-    const from = new Date(to.getTime() - days*24*3600*1000);
-    const best = new Map();
-    for (const s of sessions) {
-      if (s.type !== 'strength') continue;
-      const d = new Date(s.dateISO);
-      if (d < from || d > to) continue;
-      if (routineFilter !== 'all' && s.routineKey !== routineFilter) continue;
-      for (const st of s.sets || []) {
-        if (!validSet(st)) continue;
-        const e1 = Math.round(st.weightKg * (1 + st.reps/30));
-        const prev = best.get(st.exerciseId) || 0;
-        if (e1 > prev) best.set(st.exerciseId, e1);
-      }
-    }
-    return [...best.entries()].map(([id, oneRM]) => ({ id, oneRM, name: exercisesById[id]?.name || 'Ejercicio' }))
-      .filter(r => Number.isFinite(r.oneRM) && r.oneRM > 0)
-      .sort((a,b)=>b.oneRM - a.oneRM)
-      .slice(0,5);
-  }, [sessions, days, routineFilter, exercisesById]);
-
-
-  return (
-    <div className="space-y-4">
-      <Card className="p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">Resumen</h2>
-        </div>
-        <div className="flex items-center gap-2 mb-3">
-          <select value={range} onChange={(e)=>setRange(e.target.value)} className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-            <option value="30">30 días</option>
-            <option value="90">90 días</option>
-            <option value="180">180 días</option>
-          </select>
-          <select value={routineFilter} onChange={(e)=>setRoutineFilter(e.target.value)} className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-            <option value="all">Todas las rutinas</option>
-            {routines.map(r=> (<option key={r.id} value={r.id}>{r.name}</option>))}
-          </select>
-        </div>
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Sesiones ({range}d)</div><div className="text-lg font-semibold">{totalSesiones}</div></Card>
-          <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Volumen (4 sem)</div><div className="text-lg font-semibold">{Math.round(volumen4Semanas)} kg·rep</div></Card>
-          <Card className="p-3 text-center"><div className="text-xs text-zinc-500">PRs (4 sem)</div><div className="text-lg font-semibold">{prsUltimas4}</div></Card>
-        </div>
-        <div className="h-40">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={weekly8}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="week" hide />
-              <Tooltip formatter={(v) => `${Math.round(v)} kg·rep`} labelFormatter={(l) => `Semana ${l}`} />
-              <Bar dataKey="volume" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
-
-
-        <Card className="p-4">
-          <h2 className="text-lg font-semibold mb-2">Frecuencia por grupo (días)</h2>
-          {freqClean.length === 0 ? (
-            <div className="h-48 flex items-center justify-center text-sm text-zinc-500">Sin datos en este rango</div>
-          ) : (
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={freqClean} dataKey="days" nameKey="group" labelLine={false} label={({percent}) => `${Math.round(percent*100)}%`}>
-                    {freqClean.map((d) => (
-                      <Cell key={d.group} fill={GROUP_COLORS[d.group]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v, name, props) => `${props?.payload?.group} — ${v} días`} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </Card>
-
-        <Card className="p-4">
-          <h2 className="text-lg font-semibold mb-2">Volumen semanal por grupo</h2>
-          {hmap.weeks.length === 0 || hmap.groups.length === 0 ? (
-            <div className="h-48 flex items-center justify-center text-sm text-zinc-500">Sin datos en este rango</div>
-          ) : (
-            <HeatmapWeekGroup data={hmap} />
-          )}
-        </Card>
-
-
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">PRs recientes</h2>
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 divide-y">
-          {prs.map((pr) => (
-            <div key={pr.id} className="flex justify-between px-3 py-2 text-sm">
-              <span className="truncate">{pr.name}</span>
-              <span className="text-xs text-zinc-500">{pr.metric} · {new Date(pr.dateISO).toLocaleDateString()}</span>
-            </div>
-          ))}
-          {prs.length === 0 && <div className="px-3 py-2 text-sm text-zinc-500">Sin PRs.</div>}
-        </div>
-      </Card>
-
-      <Card className="p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">1RM estimada por ejercicio</h2>
-          <select value={exId} onChange={(e) => setExId(e.target.value)} className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-            {allExercises.map((e) => (<option key={e.id} value={e.id}>{e.name}</option>))}
-          </select>
-        </div>
-        <div className="h-40">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis allowDecimals={false} />
-              <Tooltip formatter={(v) => `${kgOrLb(Math.round(v), unit)} ${unit}`} />
-              <Line type="monotone" dataKey="oneRM" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="mt-3">
-          <h3 className="text-sm font-medium mb-1">Top 5 e1RM ({range}d)</h3>
-          <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 divide-y">
-            {topE1RM.map((row)=>(
-              <div key={row.id} className="flex justify-between px-3 py-2 text-sm">
-                <span className="truncate">{row.name}</span>
-                <span className="tabular-nums">{kgOrLb(row.oneRM, unit)} {unit}</span>
-              </div>
-            ))}
-            {topE1RM.length===0 && <div className="px-3 py-2 text-sm text-zinc-500">Sin datos todavía.</div>}
-          </div>
-        </div>
-      </Card>
-
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Sesiones</h2>
-        <div className="space-y-2">
-          {sessions.filter(s=>s.type==='strength').length === 0 && (
-            <Card className="p-3 text-sm text-zinc-500 flex items-center justify-between">
-              <span>Aún no tienes sesiones registradas.</span>
-              <Button className="text-sm" onClick={()=> setTab('today')}>Iniciar sesión</Button>
-            </Card>
-          )}
-          {sessions.filter(s => s.type === 'strength').map((s) => (
-            <div key={s.id} className="flex items-center justify-between p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/50">
-              <div>
-                <div className="font-medium">{new Date(s.dateISO).toLocaleDateString()} · Fuerza</div>
-                <div className="text-xs text-zinc-500">
-                  Volumen: {Math.round(s.totalVolume || 0)} kg·rep · {fmtTime(s.durationSec || 0)}{s.kcal ? ` · ${s.kcal} kcal` : ""}
-                </div>
-              </div>
-              <IconButton onClick={() => deleteSession(s.id)} title="Eliminar sesión"><Trash2 size={16} /></IconButton>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-
-        <Card className="p-4">
-          <h2 className="text-lg font-semibold mb-2">Top 5 e1RM ({range}d)</h2>
-          {topE1RM.map(r => (
-            <div key={r.id} className="flex justify-between py-1 text-sm"><span className="truncate">{r.name}</span><span className="tabular-nums">{kgOrLb(r.oneRM, unit)} {unit}</span></div>
-          ))}
-          {topE1RM.length===0 && <div className="text-sm text-zinc-500">Sin datos aún.</div>}
-        </Card>
-
-    </div>
-  );
-}
-
-
-function HeatmapWeekGroup({ data }) {
-  const { weeks, groups, values } = data;
-  const max = Math.max(0, ...weeks.flatMap(w => groups.map(g => values[w][g])));
-  return (
-    <div className="h-48 overflow-hidden">
-      <div className="flex">
-        <div className="flex flex-col text-[10px] mr-1">
-          {groups.map(g => (<div key={g} className="flex-1 flex items-center justify-end pr-1">{g}</div>))}
-        </div>
-        <div className="flex-1">
-          <div className="grid gap-px" style={{gridTemplateColumns:`repeat(${weeks.length},1fr)`,gridTemplateRows:`repeat(${groups.length},1fr)`}}>
-            {groups.map(g => weeks.map(w => {
-              const v = values[w][g];
-              const op = max ? v / max : 0;
-              return <div key={g+'-'+w} className="w-full h-full" style={{backgroundColor:`rgba(59,130,246,${op})`}} aria-label={`${g}, semana ${w}: ${v} días`} title={`${g}, semana ${w}: ${v} días`}></div>;
-            }))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SettingsTab({ data, setData }) {
-  const [fileErr, setFileErr] = useState("");
-  const [calc, setCalc] = useState({ weight: "", reps: "", percent: "85" });
-  const [showPolicy, setShowPolicy] = useState(false);
-
-  const onExport = () => {
-    const json = JSON.stringify(data, null, 2);
-    // Try download with Blob first
-    try {
-      const blob = new Blob([json], { type: "application/json" });
-      const URL_ = window.URL || URL;
-      const url = URL_?.createObjectURL?.(blob);
-      if (url) {
-        const a = document.createElement("a");
-        a.href = url; // may fail in sandbox, hence fallback below
-        a.download = `nicofit_backup_${todayISO()}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL_?.revokeObjectURL?.(url);
-        return;
-      }
-    } catch { /* noop */ }
-
-    // Fallback 1: copy to clipboard
-    try {
-      navigator.clipboard?.writeText(json);
-      alert("No se pudo descargar archivo. Copié el JSON al portapapeles.");
-      return;
-    } catch { /* noop */ }
-
-    // Fallback 2: open in new tab for manual save
-    try {
-      const w = window.open();
-      if (w) {
-        w.document.write(`<pre style="white-space:pre-wrap;word-break:break-word;">${escapeHtml(json)}</pre>`);
-        w.document.close();
-        return;
-      }
-    } catch { /* noop */ }
-
-    alert("Export no disponible en este entorno. Copia manual desde la consola.");
-  };
-
-  const sanitizeImported = (data) => {
-    const keys = new Set(['name', 'notes', 'exerciseName', 'setup']);
-    const walk = (val) => {
-      if (Array.isArray(val)) val.forEach(walk);
-      else if (val && typeof val === 'object') {
-        Object.keys(val).forEach(k => {
-          const v = val[k];
-          if (typeof v === 'string' && keys.has(k)) val[k] = escapeHtml(v);
-          else walk(v);
-        });
-      }
-    };
-    const clone = structuredClone(data);
-    walk(clone);
-    return clone;
-  };
-
-  const onImport = (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const obj = JSON.parse(reader.result);
-        const parsed = dataSchema.safeParse(obj);
-        if (!parsed.success) throw new Error('invalid');
-        const { state } = migrate(parsed.data);
-        const sanitized = sanitizeImported(state);
-        setData(sanitized);
-        setFileErr('');
-        alert('Datos importados ✔');
-      } catch (err) {
-        console.warn(err);
-        setFileErr('No se pudo importar (JSON inválido)');
-      }
-    };
-    reader.readAsText(f);
-  };
-
-  const oneRm = (() => { const w = parseFloat(calc.weight || 0); const r = parseInt(calc.reps || 0, 10); return epley1RM(w, r); })();
-  const targetLoad = (() => { const p = parseFloat(calc.percent || 0) / 100; return Math.round(oneRm * p); })();
-
-  return (
-    <div className="space-y-4">
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Preferencias</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label>Unidades</Label>
-            <select value={data.settings.unit} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, unit: e.target.value } }))} className="mt-1 w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-              <option value="kg">kg</option>
-              <option value="lb">lb</option>
-            </select>
-          </div>
-          <div>
-            <Label>Descanso (seg)</Label>
-            <Input type="number" value={data.settings.defaultRestSec} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, defaultRestSec: parseInt(e.target.value || 0, 10) } }))} />
-          </div>
-          <div>
-            <Label>Sonido</Label>
-            <select value={String(data.settings.sound)} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, sound: e.target.value === "true" } }))} className="mt-1 w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-              <option value="true">On</option>
-              <option value="false">Off</option>
-            </select>
-          </div>
-          <div>
-            <Label>Vibración</Label>
-            <select value={String(data.settings.vibration)} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, vibration: e.target.value === "true" } }))} className="mt-1 w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-              <option value="true">On</option>
-              <option value="false">Off</option>
-            </select>
-          </div>
-          <div>
-            <Label>Tema</Label>
-            <select value={data.settings.theme} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, theme: e.target.value } }))} className="mt-1 w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-              <option value="system">Sistema</option>
-              <option value="light">Claro</option>
-              <option value="dark">Oscuro</option>
-            </select>
-          </div>
-        </div>
-        <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">Versión: <span className="font-semibold">v{data.version || 1}</span></div>
-      </Card>
-
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Calculadora 1RM</h2>
-        <div className="grid grid-cols-3 gap-2 items-end">
-          <div>
-            <Label>Peso (kg)</Label>
-            <Input type="number" step="0.25" inputMode="decimal" value={calc.weight} onChange={(e) => setCalc((c) => ({ ...c, weight: e.target.value }))} />
-          </div>
-          <div>
-            <Label>Reps</Label>
-            <Input type="number" value={calc.reps} onChange={(e) => setCalc((c) => ({ ...c, reps: e.target.value }))} />
-          </div>
-          <div>
-            <Label>% objetivo</Label>
-            <Input type="number" value={calc.percent} onChange={(e) => setCalc((c) => ({ ...c, percent: e.target.value }))} />
-          </div>
-        </div>
-        <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">1RM estimada: <span className="font-semibold">{oneRm || 0} kg</span> · Carga al {calc.percent}%: <span className="font-semibold">{Number.isFinite(targetLoad) ? targetLoad : 0} kg</span></div>
-      </Card>
-
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Datos</h2>
-        <div className="flex items-center gap-2">
-          <Button onClick={onExport} className="text-sm"><Download size={16} className="inline mr-1" /> Exportar</Button>
-          <label className="px-4 py-2 rounded-2xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 cursor-pointer text-sm">
-            <Upload size={16} className="inline mr-1" /> Importar
-            <input type="file" accept="application/json" onChange={onImport} className="hidden" />
-          </label>
-          <Button className="text-sm" onClick={()=> setShowPolicy(true)}>Política de datos</Button>
-        </div>
-        {fileErr && <div className="text-sm text-rose-500 mt-2">{fileErr}</div>}
-        <p className="text-xs text-zinc-500 mt-2">Si la descarga está bloqueada por el entorno, copio el JSON al portapapeles o lo abro en una pestaña nueva.</p>
-      </Card>
-
-      <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-1">Tips</h2>
-        <ul className="text-sm text-zinc-600 dark:text-zinc-400 list-disc ml-5 space-y-1">
-          <li>Agrega NicoFit a tu pantalla de inicio en iPhone para abrirlo como app.</li>
-          <li>Define descansos por ejercicio desde la rutina si quieres más control.</li>
-          <li>El peso se autocompleta con el sugerido; ajústalo en cada serie si hace falta.</li>
-        </ul>
-      </Card>
-
-      {showPolicy && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40">
-          <Card className="max-w-sm w-[90%] p-4">
-            <h3 className="text-lg font-semibold mb-2">Política de datos</h3>
-            <p className="text-sm text-zinc-600 dark:text-zinc-300">
-              Los datos se guardan localmente en tu dispositivo (LocalStorage). Puedes exportarlos/importarlos.
-              Si activas PWA/notificaciones, se instalan archivos en caché para funcionar offline.
-              No se envían datos a servidores externos.
-            </p>
-            <div className="mt-3 flex justify-end">
-              <Button className="text-sm" onClick={()=> setShowPolicy(false)}>Cerrar</Button>
-            </div>
-          </Card>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ---------- Utils ----------
 // paceToStr eliminado
 function weekNumber(d) {
@@ -1595,48 +1156,6 @@ function computeWeeklyVolume(sessions) {
     res[wk] = (res[wk] || 0) + (s.totalVolume || 0);
   }
   return Object.entries(res).map(([week, volume]) => ({ week, volume: Math.round(volume) })).sort((a, b) => a.week.localeCompare(b.week));
-}
-
-// Distribución de volumen por grupo muscular en ventana de "days" días
-// Volumen semanal apilado por grupo muscular
-// Lista de PRs recientes (e1RM, volumen, reps) en ventana de "days" días
-function prsRecientes(sessions, routines, days = 30, routineKey = 'all') {
-  const exName = new Map();
-  for (const r of routines) {
-    for (const ex of r.exercises) exName.set(ex.id, ex.name);
-  }
-  const sorted = [...sessions]
-    .filter(s=> s.type==='strength' && (routineKey==='all' || s.routineKey===routineKey))
-    .sort((a,b)=> new Date(a.dateISO) - new Date(b.dateISO));
-  const bestE1 = new Map();
-  const bestVol = new Map();
-  const bestReps = new Map();
-  const res = [];
-  const since = Date.now() - days * 24 * 3600 * 1000;
-  for (const s of sorted) {
-    const t = new Date(s.dateISO).getTime();
-    for (const st of s.sets || []) {
-      if (st.mode === 'time') continue;
-      const id = st.exerciseId;
-      const name = exName.get(id) || 'Ejercicio';
-      const vol = (st.weightKg || 0) * (st.reps || 0);
-      const e1 = epley1RM(st.weightKg, st.reps);
-      const reps = st.reps || 0;
-      if (e1 > (bestE1.get(id) || 0)) {
-        if (t >= since) res.push({ id: `${st.id}-e1`, name, metric: 'e1RM', dateISO: s.dateISO });
-        bestE1.set(id, e1);
-      }
-      if (vol > (bestVol.get(id) || 0)) {
-        if (t >= since) res.push({ id: `${st.id}-vol`, name, metric: 'volumen', dateISO: s.dateISO });
-        bestVol.set(id, vol);
-      }
-      if (reps > (bestReps.get(id) || 0)) {
-        if (t >= since) res.push({ id: `${st.id}-reps`, name, metric: '+reps', dateISO: s.dateISO });
-        bestReps.set(id, reps);
-      }
-    }
-  }
-  return res.sort((a,b)=> new Date(b.dateISO) - new Date(a.dateISO)).slice(0,5);
 }
 
 // ---------- Dev self-tests (console) ----------

@@ -31,6 +31,16 @@ export default defineConfig({
       }
     })
   ],
-  build: { rollupOptions: { plugins: [visualizer({ filename: 'stats.html', open: false })] } },
+  build: {
+    rollupOptions: {
+      plugins: [visualizer({ filename: 'stats.html', open: false })],
+      output: {
+        manualChunks: {
+          recharts: ['recharts'],
+          zod: ['zod']
+        }
+      }
+    }
+  },
   server: { host: true, port: 5173 }
 })
