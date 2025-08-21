@@ -3,28 +3,18 @@ import { loadRepo, getExercise, listRoutine, primaryGroup, findAlternatives } fr
 export { primaryGroup, loadRepo, findAlternatives };
 
 export function getRoutineBaseDefaults(routineKey, exId) {
-  const cands = [
-    repo?.routineDefaults?.[routineKey]?.[exId]?.initialWeightKg,
-    repo?.routinesDetail?.[routineKey]?.[exId]?.initialWeightKg,
-    repo?.routinesDetail?.[routineKey]?.[exId]?.weightKg,
-    repo?.routinesDetail?.[routineKey]?.[exId]?.pesoKg,
-    repo?.byId?.[exId]?.defaults?.initialWeightKg,
-    repo?.byId?.[exId]?.fixed?.suggestedWeightKg,
-    repo?.byId?.[exId]?.suggestedWeightKg,
-  ];
-  for (const v of cands) if (Number.isFinite(v)) return v;
-  return undefined;
+  // In exercisesRepo.json there are no routineDefaults; use per-exercise base
+  const w = repo?.byId?.[exId]?.initialRecord?.weightKg;
+  return Number.isFinite(w) ? w : undefined;
 }
 
 export function getExerciseDefaults(exId) {
   const e = repo?.byId?.[exId] || {};
-  const a = e?.defaults?.initialWeightKg;
-  const b = e?.fixed?.minimumWeightKg;
-  return {
-    initialWeightKg: Number.isFinite(a) ? a : undefined,
-    minimumWeightKg: Number.isFinite(b) ? b : undefined,
-  };
+  const w = e?.initialRecord?.weightKg;
+  return { initialWeightKg: Number.isFinite(w) ? w : undefined };
 }
+
+export function getRepo() { return repo; }
 
 export function listMuscleGroups() {
   const set = new Set();
