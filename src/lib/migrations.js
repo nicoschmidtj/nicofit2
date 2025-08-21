@@ -1,4 +1,4 @@
-import repo from '../data/exercisesRepo.json' with { type: 'json' };
+import repo from '../data/exercisesRepo.json';
 import { getTemplateRoutineKeys, normalizeName } from './repoAdapter.js';
 
 function simpleHash(str) {
