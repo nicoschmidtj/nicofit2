@@ -1,4 +1,4 @@
-import repo from '../data/exercisesRepo.json' with { type: 'json' };
+import repo from '../data/exercisesRepo.json';
 
 /**
  * Devuelve un objeto { [routineKey]: string[] } clonado desde repo.routinesIndex.

@@ -1,11 +1,11 @@
-import repoJson from '../data/exercisesRepo.json' with { type: 'json' };
+import repo from '../data/exercisesRepo.json';
 
 /**
  * Load the exercises repository.
  * @returns {object} Repository data
  */
 export function loadRepo() {
-  return repoJson;
+  return repo;
 }
 
 /**
