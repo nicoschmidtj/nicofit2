@@ -594,53 +594,34 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
   useEffect(() => {
     setPerExerciseState({});
     setSessionOverridesBySlot({});
-  }, [routineKey, activeSession]);
+  }, [routineKey, activeSession?.id]);
 
   useEffect(() => {
     exIds.forEach((origId, idx) => {
       const slotKey = `${routineKey}:${idx}`;
       const effectiveId = sessionOverridesBySlot[slotKey] || origId;
-      if (!data.profileByExerciseId?.[effectiveId]?.last) {
-        const last = getLastUsedSetForExercise(effectiveId, data.sessions);
-        if (last) {
-          setData(d => ({
-            ...d,
-            profileByExerciseId: { ...(d.profileByExerciseId || {}), [effectiveId]: { ...(d.profileByExerciseId?.[effectiveId] || {}), last } }
-          }));
-        }
-      }
-    });
-    setPerExerciseState(prev => {
-      const copy = { ...prev };
-      exIds.forEach((origId, idx) => {
-        const slotKey = `${routineKey}:${idx}`;
-        const effectiveId = sessionOverridesBySlot[slotKey] || origId;
-        const resolved = resolveExercise(effectiveId, data.customExercisesById);
-        if (!resolved) return;
-        const needInit = !copy[slotKey] || copy[slotKey].effectiveExId !== effectiveId;
-        if (needInit) {
-          const baseWKg = getInitialWeightForExercise(effectiveId, routineKey, data);
-          const baseW = unit === 'lb' ? Math.round(baseWKg * 2.20462 * 4) / 4 : baseWKg;
-          const targetSets = resolved?.fixed?.targetSets || 3;
-          const repOrSec = resolved?.mode === 'reps' ? (resolved?.fixed?.targetReps || 10) : (resolved?.fixed?.targetTimeSec || 45);
-          copy[slotKey] = {
-            sets: Array.from({ length: targetSets }).map(() => ({
-              checked: false,
-              reps: repOrSec,
-              weight: baseW,
-              rpe: 8,
-            })),
+      const resolved = resolveExercise(effectiveId, data.customExercisesById);
+      if (!resolved) return;
+      setPerExerciseState(prev => {
+        if (prev[slotKey]) return prev;
+        const baseWKg = getInitialWeightForExercise(effectiveId, routineKey, data);
+        const baseW = unit === 'lb' ? Math.round(baseWKg * 2.20462 * 4) / 4 : baseWKg;
+        const targetSets = resolved?.fixed?.targetSets || 3;
+        const repOrSec = resolved?.mode === 'reps' ? (resolved?.fixed?.targetReps || 10) : (resolved?.fixed?.targetTimeSec || 45);
+        return {
+          ...prev,
+          [slotKey]: {
+            sets: Array.from({ length: targetSets }).map(() => ({ checked: false, reps: repOrSec, weight: baseW, rpe: 8 })),
             registeredMask: Array.from({ length: targetSets }).map(() => false),
             drop: null,
             dropRegistered: false,
             completed: false,
             effectiveExId: effectiveId,
-          };
-        }
+          }
+        };
       });
-      return copy;
     });
-  }, [exIds, sessionOverridesBySlot, routineKey, unit, data, setData]);
+  }, [exIds, sessionOverridesBySlot, routineKey, unit, activeSession?.id]);
 
   const hasActive = !!activeSession;
   const startSession = () => startStrength(selectedRoutineKey);
@@ -673,21 +654,20 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         }));
       }
     }
-    setActiveSession(s => s ? ({ ...s, sets: s.sets.filter(set => set.exerciseId !== currentExId) }) : s);
     lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
     setPrFlash('Ejercicio reemplazado');
     setTimeout(() => setPrFlash(''), 1000);
   };
 
   const registerExercise = (slotKey, idx) => {
-    if (!activeSession) return alert("Inicia la sesión primero");
+    if (!activeSession) return alert('Inicia la sesión primero');
     const st = perExerciseState[slotKey];
     if (!st) return;
-    if (st.drop && st.sets.some((s) => !s.checked)) return alert("Completa todas las series base antes del drop-set");
-    const exIdUsed = st.effectiveExId;
+    if (st.drop && st.sets.some(s => !s.checked)) return alert('Completa todas las series base antes del drop-set');
+    const exIdUsed = st?.effectiveExId || (sessionOverridesBySlot[slotKey] || exIds[idx]);
     const ex = resolveExercise(exIdUsed, data.customExercisesById);
-    const newSets = [];
-    const newMask = [...(st.registeredMask || [])];
+    const setsToPersist = [];
+    const newMask = [...(st?.registeredMask || [])];
     st.sets.forEach((s, i) => {
       if (s.checked && !newMask[i]) {
         const repsOrSec = parseInt(s.reps || 0, 10);
@@ -695,43 +675,43 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         const wkg = fromDisplayToKg(wDisp, unit);
         const rpe = parseFloat(s.rpe || 8);
         const rir = rpeToRir(rpe);
-        newSets.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe, rir, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now() });
+        setsToPersist.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe, rir, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now() });
         newMask[i] = true;
       }
     });
     let dropRegistered = st.dropRegistered || false;
-    if (st.drop && st.sets.filter((x) => x.checked).length === st.sets.length && !dropRegistered) {
+    if (st.drop && st.sets.filter(x => x.checked).length === st.sets.length && !dropRegistered) {
       const repsOrSec = parseInt(st.drop.reps || 0, 10);
       const wDisp = roundToNearest(parseFloat(st.drop.weight || 0), 0.25);
       const wkg = fromDisplayToKg(wDisp, unit);
-      newSets.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
+      setsToPersist.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps: repsOrSec, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
       dropRegistered = true;
     }
-    if (!st.drop && ex.dropCfg && st.sets.filter((x)=>x.checked).length === st.sets.length && !dropRegistered) {
-      const lastChecked = [...st.sets].reverse().find(s=>s.checked);
-      const lastWDisp = roundToNearest(parseFloat(lastChecked?.weight||0), 0.25);
+    if (!st.drop && ex.dropCfg && st.sets.filter(x => x.checked).length === st.sets.length && !dropRegistered) {
+      const lastChecked = [...st.sets].reverse().find(s => s.checked);
+      const lastWDisp = roundToNearest(parseFloat(lastChecked?.weight || 0), 0.25);
       const lastW = fromDisplayToKg(lastWDisp, unit);
       const percent = Math.max(1, Math.min(100, ex.dropCfg.percent || 80));
       const repsOffset = Number(ex.dropCfg.repsOffset ?? 0);
-      const baseReps = ex.mode==='reps' ? parseInt(lastChecked?.reps || ex.targetReps || 10, 10) : (ex.targetTimeSec||30);
+      const baseReps = ex.mode === 'reps' ? parseInt(lastChecked?.reps || ex.targetReps || 10, 10) : (ex.targetTimeSec || 30);
       const reps = Math.max(1, baseReps + (isNaN(repsOffset) ? 0 : repsOffset));
-      const wkg = Math.max(0, Math.round((lastW * percent/100) * 10)/10);
-      newSets.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
+      const wkg = Math.max(0, Math.round((lastW * percent / 100) * 10) / 10);
+      setsToPersist.push({ id: uid(), exerciseId: exIdUsed, mode: ex.mode, reps, weightKg: wkg, rpe: 10, rir: 0, tempo: tempoSugerido(ex.category, ex.mode), at: Date.now(), drop: true });
       dropRegistered = true;
     }
-    if (newSets.length === 0) return alert("Marca al menos una serie nueva");
+    if (setsToPersist.length === 0) { alert('Marca al menos una serie nueva'); return; }
 
     const bestE1 = bestE1RMForExercise(activeSession, data.sessions, exIdUsed);
     let raised = false;
-    for (const n of newSets) {
-      if (n.mode !== "time") {
+    for (const n of setsToPersist) {
+      if (n.mode !== 'time') {
         const e1 = epley1RM(n.weightKg, n.reps);
         if (e1 > bestE1) { raised = true; break; }
       }
     }
 
-    setActiveSession((s) => ({ ...s, sets: [...s.sets, ...newSets] }));
-    const lastValid = [...newSets].reverse().find(s => !s.drop);
+    setActiveSession(s => ({ ...s, sets: [...(s?.sets || []), ...setsToPersist] }));
+    const lastValid = [...setsToPersist].reverse().find(s => !s.drop);
     if (lastValid) {
       const prevProf = data.profileByExerciseId?.[exIdUsed] || {};
       const last = { weightKg: lastValid.weightKg, reps: lastValid.reps, rir: lastValid.rir, dateISO: todayISO(), setup: prevProf.last?.setup };
@@ -742,15 +722,15 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     const prevDrop = st.dropRegistered;
     lastActionRef.current = {
       exId: slotKey,
-      added: newSets.length,
+      added: setsToPersist.length,
       prevCompleted: st.completed,
       undo: () => setPerExerciseState(p => ({ ...p, [slotKey]: { ...p[slotKey], registeredMask: prevMask, dropRegistered: prevDrop, completed: st.completed } }))
     };
-    setPerExerciseState((p) => ({ ...p, [slotKey]: { ...p[slotKey], registeredMask: newMask, dropRegistered, completed: true } }));
+    setPerExerciseState(p => ({ ...p, [slotKey]: { ...p[slotKey], registeredMask: newMask, dropRegistered, completed: true } }));
     setPrFlash('Ejercicio registrado');
     setTimeout(() => { setPrFlash(''); lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null }; }, 1000);
 
-    if (raised) setTimeout(() => flashPR("PR 1RM estimada"), 1000);
+    if (raised) setTimeout(() => flashPR('PR 1RM estimada'), 1000);
 
     if (ex.groupId) {
       const mates = exIds
