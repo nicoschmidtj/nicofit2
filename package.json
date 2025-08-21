@@ -7,13 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node src/lib/__tests__/repoAdapter.smoke.test.js && tsx src/lib/__tests__/migrations.test.ts"
   },
   "dependencies": {
     "lucide-react": "^0.539.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "recharts": "^3.1.2"
+    "recharts": "^3.1.2",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
@@ -26,6 +28,7 @@
     "globals": "^16.3.0",
     "rollup-plugin-visualizer": "^6.0.3",
     "vite": "^7.1.0",
-    "vite-plugin-pwa": "^1.0.2"
+    "vite-plugin-pwa": "^1.0.2",
+    "tsx": "^4.16.2"
   }
 }
