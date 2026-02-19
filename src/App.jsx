@@ -6,7 +6,7 @@ import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
 import { Card, Button, IconButton, Input, Label } from "./ui.jsx";
-import { buildPerExerciseHistory as buildAnalyticsPerExerciseHistory } from "./lib/analytics.js";
+import { buildPerExerciseHistory as buildAnalyticsPerExerciseHistory, weeklyGoalProgress, adherenceRate, missedSessions, freqDaysByGroup, streakDays } from "./lib/analytics.js";
 import { buildPerExerciseHistory, calcNext, PROGRESSION_PROFILES } from "./lib/progression.ts";
 import { appStorage } from "./lib/storage/index.js";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.jsx";
@@ -78,6 +78,11 @@ const DEFAULT_DATA = {
     vibration: true,
     theme: "system", // system | light | dark
     onboardingCompleted: false,
+    weeklyGoals: {
+      sessions: 4,
+      volume: 12000,
+      cardio: 60,
+    },
   },
   sessions: [], // strength + cardio
   profileByExerciseId: {},
@@ -144,6 +149,14 @@ export default function App() {
       merged.customExercisesById = merged.customExercisesById || {};
       merged.version = Math.max(5, merged.version || 5);
     }
+    merged.settings = {
+      ...DEFAULT_DATA.settings,
+      ...(merged.settings || {}),
+      weeklyGoals: {
+        ...DEFAULT_DATA.settings.weeklyGoals,
+        ...(merged.settings?.weeklyGoals || {}),
+      },
+    };
     storageSnapshotRef.current = { state: merged, metadata: loaded.metadata || {} };
     return merged;
   });
@@ -394,6 +407,24 @@ export default function App() {
   const perExerciseHistory = useMemo(() => buildAnalyticsPerExerciseHistory(sessions, exercisesById), [sessions, exercisesById]);
 
   const weeklyVolume = useMemo(() => computeWeeklyVolume(sessions), [sessions]);
+  const goalProgress = useMemo(() => weeklyGoalProgress(sessions, data.settings?.weeklyGoals || {}), [sessions, data.settings?.weeklyGoals]);
+  const adherence = useMemo(() => adherenceRate(sessions, data.settings?.weeklyGoals || {}), [sessions, data.settings?.weeklyGoals]);
+  const missed = useMemo(() => missedSessions(sessions, data.settings?.weeklyGoals || {}), [sessions, data.settings?.weeklyGoals]);
+  const streak = useMemo(() => streakDays(sessions), [sessions]);
+  const weeklyGuidance = useMemo(() => {
+    const now = new Date();
+    const weekStart = new Date(now);
+    const day = (weekStart.getDay() + 6) % 7;
+    weekStart.setDate(weekStart.getDate() - day);
+    weekStart.setHours(0, 0, 0, 0);
+    const strengthThisWeek = sessions.filter((s) => s.type === "strength" && new Date(s.dateISO || s.at || now) >= weekStart);
+    const legDays = freqDaysByGroup(strengthThisWeek, repo, { from: weekStart, to: now }).find((row) => row.group === "pierna")?.days || 0;
+    if (legDays < 1) return "Te falta 1 sesión de pierna esta semana.";
+    if (missed > 0) return `Te faltan ${missed} sesiones para tu meta semanal.`;
+    if (!goalProgress.volume.ok) return `Te faltan ${Math.max(0, goalProgress.volume.target - goalProgress.volume.current)} kg·rep para tu meta de volumen.`;
+    if (!goalProgress.cardio.ok) return `Te faltan ${Math.max(0, goalProgress.cardio.target - goalProgress.cardio.current)} min de cardio esta semana.`;
+    return "¡Vas al día con tu plan semanal!";
+  }, [sessions, missed, goalProgress]);
 
   const unit = data.settings.unit;
 
@@ -475,6 +506,7 @@ export default function App() {
             lastActionRef={lastActionRef}
             setPrFlash={setPrFlash}
             weeklyPlanSummary={weeklyPlanSummary}
+            weeklyGuidance={weeklyGuidance}
           />
         )}
 
@@ -492,7 +524,7 @@ export default function App() {
 
         {tab === "history" && (
           <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
-            <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} />
+            <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} goalProgress={goalProgress} adherence={adherence} streak={streak} missed={missed} />
           </Suspense>
         )}
 
@@ -579,7 +611,7 @@ function tempoSugerido(category, mode) {
   return "controlado";
 }
 
-function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash, weeklyPlanSummary }) {
+function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash, weeklyPlanSummary, weeklyGuidance }) {
   const [selectedRoutineKey, setSelectedRoutineKey] = useState(routines[0]?.id || "");
   useEffect(() => { if (!selectedRoutineKey && routines[0]) setSelectedRoutineKey(routines[0].id); }, [routines, selectedRoutineKey]);
   const routineKey = activeSession?.routineKey || selectedRoutineKey;
@@ -809,6 +841,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
         <div className="text-xs text-zinc-500 mt-1">
           Objetivo: {weeklyPlanSummary?.objective || 'hipertrofia'} · {weeklyPlanSummary?.daysPerWeek || routines.length} días · {weeklyPlanSummary?.routines || routines.length} rutinas activas
         </div>
+        <div className="text-xs mt-2 text-emerald-600 dark:text-emerald-400">{weeklyGuidance}</div>
       </Card>
 
       {/* Sticky glass header with global timer + start/finish */}

@@ -131,6 +131,24 @@ export default function SettingsTab({ data, setData, syncStatus }) {
       </Card>
 
       <Card className="p-4">
+        <h2 className="text-lg font-semibold mb-2">Metas semanales</h2>
+        <div className="grid grid-cols-3 gap-2">
+          <div>
+            <Label>Sesiones</Label>
+            <Input type="number" min="0" value={data.settings?.weeklyGoals?.sessions ?? 0} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, weeklyGoals: { ...(d.settings?.weeklyGoals || {}), sessions: Math.max(0, parseInt(e.target.value || 0, 10)) } } }))} />
+          </div>
+          <div>
+            <Label>Volumen (kg·rep)</Label>
+            <Input type="number" min="0" step="100" value={data.settings?.weeklyGoals?.volume ?? 0} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, weeklyGoals: { ...(d.settings?.weeklyGoals || {}), volume: Math.max(0, parseInt(e.target.value || 0, 10)) } } }))} />
+          </div>
+          <div>
+            <Label>Cardio (min)</Label>
+            <Input type="number" min="0" value={data.settings?.weeklyGoals?.cardio ?? 0} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, weeklyGoals: { ...(d.settings?.weeklyGoals || {}), cardio: Math.max(0, parseInt(e.target.value || 0, 10)) } } }))} />
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-4">
         <h2 className="text-lg font-semibold mb-2">Calculadora 1RM</h2>
         <div className="grid grid-cols-3 gap-2 items-end">
           <div>
