@@ -52,6 +52,7 @@ const DEFAULT_DATA = {
     sound: true,
     vibration: true,
     theme: "system", // system | light | dark
+    visualPreset: "ocean",
     onboardingCompleted: false,
     weeklyGoals: {
       sessions: 4,
@@ -216,6 +217,11 @@ export default function App() {
     document.addEventListener('visibilitychange', applyTheme);
     return () => document.removeEventListener('visibilitychange', applyTheme);
   }, [data.settings.theme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.preset = data.settings?.visualPreset || "ocean";
+  }, [data.settings?.visualPreset]);
 
   const routines = useMemo(() => {
     const idx = data.userRoutinesIndex || {};
@@ -391,7 +397,7 @@ export default function App() {
 
   if (!data.settings?.onboardingCompleted) {
     return (
-      <div className="min-h-screen w-full bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900 text-zinc-900 dark:text-zinc-100">
+      <div className="app-shell">
         <div className="max-w-md mx-auto px-4 pt-8">
           <header className="mb-6">
             <h1 className="text-2xl font-semibold">Bienvenido a NicoFit</h1>
@@ -404,11 +410,11 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900 text-zinc-900 dark:text-zinc-100">
-      <div className="max-w-md mx-auto pb-32 px-4 pt-6">
-        <header className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <div className="h-9 w-9 rounded-2xl bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 grid place-items-center"><Flame size={18} /></div>
+    <div className="app-shell">
+      <div className="app-container">
+        <header className="app-header">
+          <div className="app-brand">
+            <div className="app-logo"><Flame size={18} /></div>
       <div>
               <h1 className="text-xl font-semibold leading-none">NicoFit</h1>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">Entrena. Registra. Progresa.</p>
@@ -417,7 +423,7 @@ export default function App() {
           <div className="text-xs text-zinc-500">{dateStr}</div>
         </header>
 
-        <div className="mb-3 text-xs">
+        <div className="mb-3 text-xs sync-chip">
           {syncStatus.phase === "syncing" && <span className="text-amber-600">Sincronizando…</span>}
           {syncStatus.phase === "conflict" && <span className="text-orange-600">Conflicto resuelto automáticamente</span>}
           {syncStatus.phase === "error" && <span className="text-rose-600">Error de sync: {syncStatus.error}</span>}
@@ -504,8 +510,8 @@ export default function App() {
           <Card className="px-4 py-3 flex items-center gap-3">
             <span className="text-sm">{confirmFlash.message}</span>
             <div className="flex gap-2">
-              <Button className="text-sm bg-emerald-600" onClick={()=>{ try{confirmFlash.onConfirm?.();}finally{setConfirmFlash(null);} }}>Confirmar</Button>
-              <Button className="text-sm" onClick={()=> setConfirmFlash(null)}>Cancelar</Button>
+              <Button variant="primary" className="text-sm" onClick={()=>{ try{confirmFlash.onConfirm?.();}finally{setConfirmFlash(null);} }}>Confirmar</Button>
+              <Button variant="ghost" className="text-sm" onClick={()=> setConfirmFlash(null)}>Cancelar</Button>
             </div>
           </Card>
         </div>

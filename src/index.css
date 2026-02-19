@@ -1,68 +1,72 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
+  --font-sans: "Inter", "SF Pro Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --line-height: 1.45;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-sm: 0.625rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.1rem;
+  --radius-xl: 1.4rem;
+
+  --shadow-sm: 0 1px 2px rgb(10 15 35 / 0.06);
+  --shadow-md: 0 8px 24px rgb(10 15 35 / 0.08);
+  --shadow-lg: 0 20px 45px rgb(10 15 35 / 0.16);
+
+  --bg: #f3f6fc;
+  --bg-elevated: #ffffff;
+  --bg-muted: #eef2fb;
+  --text: #131b2f;
+  --text-muted: #5f6a86;
+  --border: #dce4f5;
+  --primary: #4764ff;
+  --primary-strong: #314ddd;
+  --primary-contrast: #f7f9ff;
+  --success: #0f9f70;
+  --danger: #dd496e;
+
+  font-family: var(--font-sans);
+  line-height: var(--line-height);
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+:root.dark {
+  --bg: #0c1222;
+  --bg-elevated: #121a2f;
+  --bg-muted: #1a233c;
+  --text: #edf2ff;
+  --text-muted: #9ca8cb;
+  --border: #263453;
+  --primary: #7f95ff;
+  --primary-strong: #94a8ff;
+  --primary-contrast: #11193a;
+  --success: #43d2a4;
+  --danger: #ff7b9d;
 }
-a:hover {
-  color: #535bf2;
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  background: radial-gradient(circle at top, color-mix(in srgb, var(--primary) 8%, var(--bg)) 0%, var(--bg) 48%);
+  color: var(--text);
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+a {
+  color: inherit;
+  text-decoration: none;
 }
