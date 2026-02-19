@@ -11,7 +11,7 @@ import { appStorage } from "./lib/storage/index.js";
 import { fmtTime, epley1RM, kgOrLb } from "./lib/metrics.ts";
 import WorkoutTabContainer from "./features/workout/WorkoutTabContainer.jsx";
 import RoutinesTabContainer from "./features/routines/RoutinesTabContainer.jsx";
-import { calcNext, rpeToRir, validateSetRegistration } from "./features/workout/services/workoutService.js";
+import { calcNext, validateSetRegistration } from "./features/workout/services/workoutService.js";
 import { useWorkoutTimer } from "./features/workout/hooks/useWorkoutTimer.js";
 import { useActiveSession } from "./features/workout/hooks/useActiveSession.js";
 
@@ -31,6 +31,13 @@ const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 const toISODate = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString();
 const todayISO = () => toISODate().slice(0, 10);
 const fromDisplayToKg = (val, unit) => (unit === "lb" ? Math.round((val / 2.20462) * 10) / 10 : val);
+const rpeToRir = (rpe) => {
+  const x = Math.round(parseFloat(rpe || 0));
+  if (x >= 10) return 0;
+  if (x >= 9) return 1;
+  if (x >= 8) return 2;
+  return 3;
+};
 // Mapeo de grupos musculares desde el nombre del ejercicio
 const MUSCLE_FROM_NAME = (name='')=>{
   const n = String(name).toLowerCase();
