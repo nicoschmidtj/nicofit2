@@ -44,28 +44,8 @@ const rpeToRir = (rpe) => {
   return 3;
 };
 
-// Mapeo de grupos musculares desde el nombre del ejercicio
-const MUSCLE_FROM_NAME = (name='')=>{
-  const n = String(name).toLowerCase();
-  if (/(pecho|press banca|apertura)/.test(n)) return 'pecho';
-  if (/(espalda|remo|jalón|pull)/.test(n)) return 'espalda';
-  if (/(pierna|squat|peso muerto|zancada|cuádriceps|glúteo)/.test(n)) return 'pierna';
-  if (/(hombro|militar|lateral|rear delt|face pull)/.test(n)) return 'hombro';
-  if (/(bíceps|curl)/.test(n)) return 'brazo';
-  if (/(tríceps|overhead|barra)/.test(n)) return 'brazo';
-  if (/(core|abs|plancha|rueda|paloff|woodchopper|elevación piernas)/.test(n)) return 'core';
-  return 'otros';
-};
-
-// Mapeo simple de implemento desde el nombre
-const IMPLEMENT_FROM_NAME = (name='')=>{
-  const n = String(name).toLowerCase();
-  if (/(mancuerna|dumbbell)/.test(n)) return 'mancuerna';
-  if (/(barra|barbell)/.test(n)) return 'barra';
-  if (/(polea|cable)/.test(n)) return 'polea';
-  if (/(máquina|maquina|machine)/.test(n)) return 'maquina';
-  return 'otros';
-};
+const MUSCLE_GROUP_OPTIONS = ['pecho', 'espalda', 'pierna', 'hombro', 'brazo', 'core', 'otros'];
+const IMPLEMENT_OPTIONS = ['maquina', 'barra', 'barra_z', 'mancuerna', 'polea', 'corporal', 'rueda_abs', 'paralelas', 'disco', 'banda', 'otros'];
 
 
 // ---------- Default dataset ----------
@@ -359,6 +339,10 @@ export default function App() {
         targetRepsRange = prompt("Rango reps a mostrar", "8–12") || "8–12";
       }
       const restSec = parseInt(prompt("Descanso por ejercicio (seg, vacío=global)") || "0", 10) || undefined;
+      const pickMuscle = prompt(`Grupo muscular (${MUSCLE_GROUP_OPTIONS.join('/')})`, "otros") || "otros";
+      const muscleGroup = MUSCLE_GROUP_OPTIONS.includes(pickMuscle) ? pickMuscle : 'otros';
+      const pickImplement = prompt(`Implemento (${IMPLEMENT_OPTIONS.join('/')})`, "otros") || "otros";
+      const implement = IMPLEMENT_OPTIONS.includes(pickImplement) ? pickImplement : 'otros';
       const notes = prompt("Notas (opcional)") || "";
       const id = `custom/${uid()}`;
       const ex = {
@@ -366,7 +350,9 @@ export default function App() {
         name,
         mode,
         category,
-        muscles: [MUSCLE_FROM_NAME(name)],
+        muscles: [muscleGroup],
+        muscleGroup,
+        implement,
         fixed: { targetSets, targetRepsRange, targetTimeSec: mode === 'time' ? targetTimeSec : undefined, restSec },
         notes,
       };
@@ -1199,6 +1185,12 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
                           <option value="aislado">aislado</option>
                           <option value="core">core</option>
                         </select>
+                        <select value={draft?.muscleGroup || draft?.muscles?.[0] || "otros"} onChange={e=>setDraft(d=>({...d, muscleGroup:e.target.value, muscles:[e.target.value]}))} className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+                          {MUSCLE_GROUP_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <select value={draft?.implement || "otros"} onChange={e=>setDraft(d=>({...d, implement:e.target.value}))} className="px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+                          {IMPLEMENT_OPTIONS.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
                         <Input type="number" value={draft?.targetSets||0} onChange={e=>setDraft(d=>({...d, targetSets:parseInt(e.target.value||0,10)}))} />
                         {draft?.mode === 'reps' ? (
                           <>
@@ -1225,7 +1217,9 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
                                     name:draft.name,
                                     mode:draft.mode,
                                     category:draft.category,
-                                    muscles:[MUSCLE_FROM_NAME(draft.name)],
+                                    muscles:[draft.muscleGroup],
+                                    muscleGroup:draft.muscleGroup,
+                                    implement:draft.implement,
                                     fixed:{ targetSets:draft.targetSets, targetRepsRange:draft.targetRepsRange, targetTimeSec:draft.targetTimeSec, restSec:draft.restSec },
                                     notes:draft.notes
                                   }
@@ -1233,7 +1227,7 @@ function RoutinesTab({ routines, addRoutine, deleteRoutine, renameRoutine, addEx
                               }));
                             } else {
                               const newId = `custom/${uid()}`;
-                              const newEx = { id:newId, name:draft.name, mode:draft.mode, category:draft.category, muscles:[MUSCLE_FROM_NAME(draft.name)], fixed:{ targetSets:draft.targetSets, targetRepsRange:draft.targetRepsRange, targetTimeSec:draft.targetTimeSec, restSec:draft.restSec }, notes:draft.notes };
+                              const newEx = { id:newId, name:draft.name, mode:draft.mode, category:draft.category, muscles:[draft.muscleGroup], muscleGroup:draft.muscleGroup, implement:draft.implement, fixed:{ targetSets:draft.targetSets, targetRepsRange:draft.targetRepsRange, targetTimeSec:draft.targetTimeSec, restSec:draft.restSec }, notes:draft.notes };
                               setData(d=>({
                                 ...d,
                                 customExercisesById:{ ...(d.customExercisesById||{}), [newId]: newEx },

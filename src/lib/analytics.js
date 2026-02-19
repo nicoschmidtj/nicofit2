@@ -16,21 +16,21 @@ export function dayKey(d) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-const MUSCLE_FROM_NAME = (name = '') => {
+const fallbackGroupFromName = (name = '') => {
   const n = String(name).toLowerCase();
-  if (/(pecho|press banca|apertura)/.test(n)) return 'pecho';
-  if (/(espalda|remo|jalón|pull)/.test(n)) return 'espalda';
-  if (/(pierna|squat|peso muerto|zancada|cuádriceps|glúteo)/.test(n)) return 'pierna';
-  if (/(hombro|militar|lateral|rear delt|face pull)/.test(n)) return 'hombro';
-  if (/(bíceps|curl)/.test(n)) return 'brazo';
-  if (/(tríceps|overhead|barra)/.test(n)) return 'brazo';
-  if (/(core|abs|plancha|rueda|paloff|woodchopper|elevación piernas)/.test(n)) return 'core';
-  return 'otros';
+  if (!n) return null;
+  if (n.includes('pecho')) return 'pecho';
+  if (n.includes('espalda') || n.includes('remo')) return 'espalda';
+  if (n.includes('pierna') || n.includes('sentadilla')) return 'pierna';
+  if (n.includes('hombro')) return 'hombro';
+  if (n.includes('bíceps') || n.includes('tríceps') || n.includes('brazo')) return 'brazo';
+  if (n.includes('core') || n.includes('abs')) return 'core';
+  return null;
 };
 
 export function primaryGroupOf(exId, repo, nameFallback = '') {
   const ex = repo?.byId?.[exId];
-  return ex?.muscles?.[0] || MUSCLE_FROM_NAME(nameFallback || ex?.name || '') || 'otros';
+  return ex?.muscleGroup || ex?.muscles?.[0] || fallbackGroupFromName(nameFallback || ex?.name || '') || 'otros';
 }
 
 export function validSet(s) {
