@@ -1,14 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
-import { migrate } from "./lib/migrations.ts";
-import { dataSchema } from "./lib/schema.ts";
 import { getTemplateRoutineName, suggestAlternativesByExerciseId, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
 import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
 import { Card, Button, IconButton, Input, Label } from "./ui.jsx";
 import { buildPerExerciseHistory } from "./lib/analytics.js";
+import { appStorage } from "./lib/storage/index.js";
 
 const repo = loadRepo();
 // =====================================
@@ -114,22 +113,6 @@ const DEFAULT_DATA = {
   customRoutineNames: {},
 };
 
-// ---------- Storage ----------
-const LS_KEY = "nicofit_data_v5";
-const loadFromLS = () => {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    const parsed = raw ? JSON.parse(raw) : DEFAULT_DATA;
-    const { state, warnings } = migrate(parsed);
-    warnings.forEach(w => console.warn('migration:', w));
-    return state;
-  } catch (e) {
-    console.warn("Load failed, using defaults", e);
-    return DEFAULT_DATA;
-  }
-};
-const save = (data) => localStorage.setItem(LS_KEY, JSON.stringify(data));
-
 // ---------- Beep ----------
 const useBeep = () => {
   const ctxRef = useRef(null);
@@ -170,8 +153,10 @@ const SettingsTab = React.lazy(() => import("./SettingsTab"));
 
 // ---------- Main App ----------
 export default function App() {
+  const storageSnapshotRef = useRef({ state: DEFAULT_DATA, metadata: {} });
   const [data, setData] = useState(() => {
-    const initial = loadFromLS();
+    const loaded = appStorage.loadState();
+    const initial = loaded.state || DEFAULT_DATA;
     const merged = { ...DEFAULT_DATA, ...initial };
     if (merged.userRoutinesIndex?.extra1?.length === 0) {
       delete merged.userRoutinesIndex.extra1;
@@ -186,9 +171,10 @@ export default function App() {
       merged.customExercisesById = merged.customExercisesById || {};
       merged.version = Math.max(5, merged.version || 5);
     }
-    save(merged);
+    storageSnapshotRef.current = { state: merged, metadata: loaded.metadata || {} };
     return merged;
   });
+  const [syncStatus, setSyncStatus] = useState({ phase: "idle", lastSyncedAt: null, error: null });
   const [tab, setTab] = useState("today");
   const [activeSession, setActiveSession] = useState(null); // {id,type,dateISO,routineKey,sets:[],startedAt,kcal?}
   const [restSec, setRestSec] = useState(0);
@@ -198,23 +184,22 @@ export default function App() {
   const [confirmFlash, setConfirmFlash] = useState(null); // { message, onConfirm }
   const [dateStr] = useState(() => new Date().toLocaleDateString());
   const lastActionRef = useRef({ exId: null, added: 0, prevCompleted: false });
-  const restoredRef = useRef(false);
   const beep = useBeep();
 
-  useEffect(() => save(data), [data]);
-  // Autoguardado de sesión activa (restaurar solo una vez al montar)
-  useEffect(()=>{
-    if (restoredRef.current) return;
-    const raw = localStorage.getItem('nicofit_active');
-    if (raw) {
-  try { setActiveSession(JSON.parse(raw)); } catch { /* noop */ }
-    }
-    restoredRef.current = true;
-  },[]);
-  useEffect(()=>{
-    if (activeSession) localStorage.setItem('nicofit_active', JSON.stringify(activeSession));
-    else localStorage.removeItem('nicofit_active');
-  },[activeSession]);
+  useEffect(() => appStorage.subscribeSyncStatus(setSyncStatus), []);
+  useEffect(() => {
+    const prev = storageSnapshotRef.current;
+    appStorage.saveState({
+      state: data,
+      previousState: prev.state,
+      metadata: prev.metadata,
+    }).then((nextSnapshot) => {
+      storageSnapshotRef.current = nextSnapshot;
+      if (JSON.stringify(nextSnapshot.state) !== JSON.stringify(data)) {
+        setData(nextSnapshot.state);
+      }
+    });
+  }, [data]);
   useEffect(()=>{
     const handler = (e)=>{ if(activeSession && (activeSession.sets||[]).length>0){ e.preventDefault(); e.returnValue=''; } };
     window.addEventListener('beforeunload', handler);
@@ -448,6 +433,15 @@ export default function App() {
           <div className="text-xs text-zinc-500">{dateStr}</div>
         </header>
 
+        <div className="mb-3 text-xs">
+          {syncStatus.phase === "syncing" && <span className="text-amber-600">Sincronizando…</span>}
+          {syncStatus.phase === "conflict" && <span className="text-orange-600">Conflicto resuelto automáticamente</span>}
+          {syncStatus.phase === "error" && <span className="text-rose-600">Error de sync: {syncStatus.error}</span>}
+          {syncStatus.phase === "idle" && syncStatus.lastSyncedAt && (
+            <span className="text-zinc-500">Última sync: {new Date(syncStatus.lastSyncedAt).toLocaleString()}</span>
+          )}
+        </div>
+
         {tab === "today" && (
           <TodayTab
             data={data}
@@ -488,7 +482,7 @@ export default function App() {
 
         {tab === "settings" && (
           <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
-            <SettingsTab data={data} setData={setData} />
+            <SettingsTab data={data} setData={setData} syncStatus={syncStatus} />
           </Suspense>
         )}
       </div>
