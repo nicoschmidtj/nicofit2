@@ -1,4 +1,4 @@
-import repo from '../data/exercisesRepo.json' assert { type: 'json' };
+import repo from '../data/exercisesRepo.json' with { type: 'json' };
 import { loadRepo, getExercise, listRoutine, primaryGroup, findAlternatives } from '../lib/repo.js';
 export { primaryGroup, loadRepo, findAlternatives };
 

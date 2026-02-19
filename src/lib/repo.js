@@ -1,4 +1,4 @@
-import repo from '../data/exercisesRepo.json' assert { type: 'json' };
+import repo from '../data/exercisesRepo.json' with { type: 'json' };
 
 /**
  * Load the exercises repository.
