@@ -9,6 +9,8 @@ import { Card, Button, IconButton, Input, Label } from "./ui.jsx";
 import { buildPerExerciseHistory as buildAnalyticsPerExerciseHistory } from "./lib/analytics.js";
 import { buildPerExerciseHistory, calcNext, PROGRESSION_PROFILES } from "./lib/progression.ts";
 import { appStorage } from "./lib/storage/index.js";
+import OnboardingWizard from "./features/onboarding/OnboardingWizard.jsx";
+import { generateOnboardingPlan } from "./features/onboarding/planGenerator.js";
 
 const repo = loadRepo();
 // =====================================
@@ -75,6 +77,7 @@ const DEFAULT_DATA = {
     sound: true,
     vibration: true,
     theme: "system", // system | light | dark
+    onboardingCompleted: false,
   },
   sessions: [], // strength + cardio
   profileByExerciseId: {},
@@ -153,6 +156,11 @@ export default function App() {
   const [prFlash, setPrFlash] = useState("");
   const [confirmFlash, setConfirmFlash] = useState(null); // { message, onConfirm }
   const [dateStr] = useState(() => new Date().toLocaleDateString());
+  const [weeklyPlanSummary, setWeeklyPlanSummary] = useState(() => ({
+    objective: data.settings?.onboardingObjective || "",
+    daysPerWeek: data.settings?.onboardingDaysPerWeek || Object.keys(data.userRoutinesIndex || {}).length,
+    routines: Object.keys(data.userRoutinesIndex || {}).length,
+  }));
   const lastActionRef = useRef({ exId: null, added: 0, prevCompleted: false });
   const beep = useBeep();
 
@@ -389,6 +397,43 @@ export default function App() {
 
   const unit = data.settings.unit;
 
+  const completeOnboarding = (answers) => {
+    const generated = generateOnboardingPlan(answers);
+    setData((d) => ({
+      ...d,
+      settings: {
+        ...d.settings,
+        onboardingCompleted: true,
+        onboardingObjective: answers.objective,
+        onboardingDaysPerWeek: generated.summary.daysPerWeek,
+      },
+      profileByExerciseId: {
+        ...(d.profileByExerciseId || {}),
+        ...generated.profileByExerciseId,
+      },
+      userRoutinesIndex: generated.userRoutinesIndex,
+    }));
+    setWeeklyPlanSummary({
+      objective: generated.summary.objective,
+      daysPerWeek: generated.summary.daysPerWeek,
+      routines: Object.keys(generated.userRoutinesIndex || {}).length,
+    });
+  };
+
+  if (!data.settings?.onboardingCompleted) {
+    return (
+      <div className="min-h-screen w-full bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900 text-zinc-900 dark:text-zinc-100">
+        <div className="max-w-md mx-auto px-4 pt-8">
+          <header className="mb-6">
+            <h1 className="text-2xl font-semibold">Bienvenido a NicoFit</h1>
+            <p className="text-sm text-zinc-500">Completa el onboarding para crear tu rutina base.</p>
+          </header>
+          <OnboardingWizard onFinish={completeOnboarding} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900 text-zinc-900 dark:text-zinc-100">
       <div className="max-w-md mx-auto pb-32 px-4 pt-6">
@@ -429,6 +474,7 @@ export default function App() {
             weeklyVolume={weeklyVolume}
             lastActionRef={lastActionRef}
             setPrFlash={setPrFlash}
+            weeklyPlanSummary={weeklyPlanSummary}
           />
         )}
 
@@ -533,7 +579,7 @@ function tempoSugerido(category, mode) {
   return "controlado";
 }
 
-function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash }) {
+function TodayTab({ data, setData, routines, activeSession, setActiveSession, startStrength, finishStrength, flashPR, restSec, startRest, unit, setTab, weeklyVolume, lastActionRef, setPrFlash, weeklyPlanSummary }) {
   const [selectedRoutineKey, setSelectedRoutineKey] = useState(routines[0]?.id || "");
   useEffect(() => { if (!selectedRoutineKey && routines[0]) setSelectedRoutineKey(routines[0].id); }, [routines, selectedRoutineKey]);
   const routineKey = activeSession?.routineKey || selectedRoutineKey;
@@ -758,6 +804,13 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
 
   return (
     <div className="space-y-4">
+      <Card className="p-3">
+        <div className="text-sm font-semibold">Tu plan de esta semana</div>
+        <div className="text-xs text-zinc-500 mt-1">
+          Objetivo: {weeklyPlanSummary?.objective || 'hipertrofia'} · {weeklyPlanSummary?.daysPerWeek || routines.length} días · {weeklyPlanSummary?.routines || routines.length} rutinas activas
+        </div>
+      </Card>
+
       {/* Sticky glass header with global timer + start/finish */}
       <div className="sticky top-0 z-30 -mx-4 px-4 pt-2 pb-2 bg-white/70 dark:bg-zinc-950/50 backdrop-blur border-b border-zinc-200/60 dark:border-zinc-800 overflow-visible">
         <div className="max-w-md mx-auto flex items-center justify-between gap-2">
