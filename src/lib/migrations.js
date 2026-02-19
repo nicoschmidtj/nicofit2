@@ -1,4 +1,4 @@
-import repo from '../data/exercisesRepo.json' assert { type: 'json' };
+import repo from '../data/exercisesRepo.json' with { type: 'json' };
 import { getTemplateRoutineKeys, normalizeName } from './repoAdapter.js';
 
 function simpleHash(str) {
@@ -29,9 +29,20 @@ export function migrateToTemplates(prevData = {}) {
   const allRepoExercises = Object.values(repo.byId || {});
   const findMatchId = (name) => {
     const norm = normalizeName(name);
+    if (!norm) return null;
+
     for (const ex of allRepoExercises) {
       const n = normalizeName(ex.name);
-      if (n === norm || n.includes(norm) || norm.includes(n)) return ex.id;
+      if (n === norm) return ex.id;
+    }
+
+    // Fuzzy includes are only applied for sufficiently descriptive names to
+    // avoid accidental matches with tiny/ambiguous labels.
+    if (norm.length < 4) return null;
+
+    for (const ex of allRepoExercises) {
+      const n = normalizeName(ex.name);
+      if (n.includes(norm) || norm.includes(n)) return ex.id;
     }
     return null;
   };

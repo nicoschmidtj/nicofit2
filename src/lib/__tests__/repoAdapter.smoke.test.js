@@ -24,4 +24,20 @@ console.assert(ids.length === 2, 'migration should map two exercises');
 console.assert(ids.some(id => id.startsWith('custom/')), 'migration should create a custom exercise');
 console.assert(Object.keys(migrated.customExercisesById).length === 1, 'customExercisesById should contain one entry');
 
+// Regression: empty names should never match the first repo exercise.
+const withEmptyName = {
+  routines: [
+    { name: 'Test', exercises: [
+      { name: '', mode: 'reps', targetSets: 1, targetReps: 8 },
+    ] }
+  ],
+  sessions: [],
+  profileByExerciseId: {}
+};
+const migratedEmpty = migrateToTemplates(withEmptyName);
+const emptyKey = Object.keys(migratedEmpty.userRoutinesIndex)[0];
+const [emptyId] = migratedEmpty.userRoutinesIndex[emptyKey];
+console.assert(emptyId?.startsWith('custom/'), 'empty-name exercise must be migrated as custom');
+console.assert(migratedEmpty.customExercisesById[emptyId]?.name === '', 'custom exercise should preserve empty name');
+
 console.log('repoAdapter smoke tests passed');
