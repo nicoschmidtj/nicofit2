@@ -5,6 +5,13 @@ import { dataSchema } from "../../lib/schema.ts";
 import { Card, Button, Input, Label } from "../../ui.jsx";
 import { e1RM, todayISO } from "../../lib/metrics.ts";
 
+
+const THEME_PRESETS = [
+  { id: "ocean", label: "Ocean", colors: ["#4764ff", "#0f9f70", "#131b2f"] },
+  { id: "sunset", label: "Sunset", colors: ["#ff7a59", "#ff4f8b", "#22233a"] },
+  { id: "forest", label: "Forest", colors: ["#1f8f65", "#89c65b", "#172923"] },
+];
+
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export default function SettingsTab({ data, setData, syncStatus }) {
@@ -86,10 +93,11 @@ export default function SettingsTab({ data, setData, syncStatus }) {
 
   const oneRm = (() => { const w = parseFloat(calc.weight || 0); const r = parseInt(calc.reps || 0, 10); return e1RM(w, r); })();
   const targetLoad = (() => { const p = parseFloat(calc.percent || 0) / 100; return Math.round(oneRm * p); })();
+  const selectedPreset = data.settings.visualPreset || "ocean";
 
   return (
     <div className="space-y-4">
-      <Card className="p-4">
+      <Card variant="elevated" className="p-4">
         <h2 className="text-lg font-semibold mb-2">Preferencias</h2>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -119,11 +127,32 @@ export default function SettingsTab({ data, setData, syncStatus }) {
           </div>
           <div>
             <Label>Tema</Label>
-            <select value={data.settings.theme} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, theme: e.target.value } }))} className="mt-1 w-full px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+            <select value={data.settings.theme} onChange={(e) => setData((d) => ({ ...d, settings: { ...d.settings, theme: e.target.value } }))}>
               <option value="system">Sistema</option>
               <option value="light">Claro</option>
               <option value="dark">Oscuro</option>
             </select>
+          </div>
+        </div>
+        <div className="mt-4">
+          <Label>Theme preview</Label>
+          <div className="theme-preview-grid">
+            {THEME_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className="theme-swatch"
+                data-active={selectedPreset === preset.id}
+                onClick={() => setData((d) => ({ ...d, settings: { ...d.settings, visualPreset: preset.id } }))}
+              >
+                <div className="flex items-center gap-1">
+                  {preset.colors.map((c) => (
+                    <span key={c} className="h-2 w-2 rounded-full" style={{ background: c, display: 'inline-block' }} />
+                  ))}
+                </div>
+                <div className="text-xs mt-1">{preset.label}</div>
+              </button>
+            ))}
           </div>
         </div>
         <div className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">Versión: <span className="font-semibold">v{data.version || 1}</span></div>
@@ -169,12 +198,12 @@ export default function SettingsTab({ data, setData, syncStatus }) {
       <Card className="p-4">
         <h2 className="text-lg font-semibold mb-2">Datos y backup</h2>
         <div className="flex items-center gap-2">
-          <Button onClick={onExport} className="text-sm"><Download size={16} className="inline mr-1" /> Exportar backup</Button>
+          <Button variant="secondary" onClick={onExport} className="text-sm"><Download size={16} className="inline mr-1" /> Exportar backup</Button>
           <label className="px-4 py-2 rounded-2xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 cursor-pointer text-sm">
             <Upload size={16} className="inline mr-1" /> Importar backup
             <input type="file" accept="application/json" onChange={onImport} className="hidden" />
           </label>
-          <Button className="text-sm" onClick={() => setShowPolicy(true)}>Política de datos</Button>
+          <Button variant="ghost" className="text-sm" onClick={() => setShowPolicy(true)}>Política de datos</Button>
         </div>
         {fileErr && <div className="text-sm text-rose-500 mt-2">{fileErr}</div>}
         <p className="text-xs text-zinc-500 mt-2">La sincronización en la nube es primaria. Exportar/Importar queda como respaldo manual.</p>
@@ -200,7 +229,7 @@ export default function SettingsTab({ data, setData, syncStatus }) {
               Si activas PWA/notificaciones, se instalan archivos en caché para funcionar offline.
             </p>
             <div className="mt-3 flex justify-end">
-              <Button className="text-sm" onClick={() => setShowPolicy(false)}>Cerrar</Button>
+              <Button variant="secondary" className="text-sm" onClick={() => setShowPolicy(false)}>Cerrar</Button>
             </div>
           </Card>
         </div>
