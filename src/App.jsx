@@ -8,6 +8,12 @@ import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise 
 import { Card, Button, IconButton, Input, Label } from "./ui.jsx";
 import { buildPerExerciseHistory } from "./lib/analytics.js";
 import { appStorage } from "./lib/storage/index.js";
+import { fmtTime, epley1RM, kgOrLb } from "./lib/metrics.ts";
+import WorkoutTabContainer from "./features/workout/WorkoutTabContainer.jsx";
+import RoutinesTabContainer from "./features/routines/RoutinesTabContainer.jsx";
+import { calcNext, rpeToRir, validateSetRegistration } from "./features/workout/services/workoutService.js";
+import { useWorkoutTimer } from "./features/workout/hooks/useWorkoutTimer.js";
+import { useActiveSession } from "./features/workout/hooks/useActiveSession.js";
 
 const repo = loadRepo();
 // =====================================
@@ -22,56 +28,9 @@ const repo = loadRepo();
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 // clamp eliminado si no se usa
-const fmtTime = (sec) => {
-  const s = Math.max(0, Math.floor(sec));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${r.toString().padStart(2, "0")}`;
-};
 const toISODate = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString();
 const todayISO = () => toISODate().slice(0, 10);
-const epley1RM = (w, reps) => (w > 0 && reps > 0 ? Math.round(w * (1 + reps / 30)) : 0);
-const kgOrLb = (val, unit) => (unit === "lb" ? Math.round(val * 2.20462 * 10) / 10 : Math.round(val));
 const fromDisplayToKg = (val, unit) => (unit === "lb" ? Math.round((val / 2.20462) * 10) / 10 : val);
-const rpeToRir = (rpe) => {
-  const x = Math.round(parseFloat(rpe || 0));
-  if (x >= 10) return 0;
-  if (x >= 9) return 1;
-  if (x >= 8) return 2;
-  return 3;
-};
-
-// Auto-progresión helpers
-const LOAD_STEP_KG = 2.5;
-const parseRange = (ex) => {
-  if (ex.mode === 'time') return [ex.targetTimeSec || 0, ex.targetTimeSec || 0];
-  const str = ex.targetRepsRange || `${ex.targetReps || 0}`;
-  const nums = String(str).match(/\d+/g)?.map(n => parseInt(n,10)) || [];
-  if (nums.length === 0) return [ex.targetReps || 0, ex.targetReps || 0];
-  if (nums.length === 1) return [nums[0], nums[0]];
-  return [nums[0], nums[1]];
-};
-const calcNext = ({ last, ex, profile }) => {
-  if (!last || ex.mode === 'time') return {};
-  const [minReps, maxReps] = parseRange(ex);
-  const minW = profile?.minWeightKg || 0;
-  let weightKg = last.weightKg;
-  let reps = last.reps;
-  const rir = last.rir ?? rpeToRir(last.rpe || 8);
-  if (rir >= 3) {
-    weightKg = Math.max(minW, last.weightKg + LOAD_STEP_KG);
-  } else if (rir === 2) {
-    if (reps < maxReps) reps = reps + 1;
-  } else if (rir <= 0 || reps < minReps) {
-    if (last.weightKg - LOAD_STEP_KG >= minW) {
-      weightKg = Math.max(minW, last.weightKg - LOAD_STEP_KG);
-    } else {
-      reps = Math.max(1, reps - 1);
-    }
-  }
-  return { weightKg, reps };
-};
-
 // Mapeo de grupos musculares desde el nombre del ejercicio
 const MUSCLE_FROM_NAME = (name='')=>{
   const n = String(name).toLowerCase();
@@ -82,16 +41,6 @@ const MUSCLE_FROM_NAME = (name='')=>{
   if (/(bíceps|curl)/.test(n)) return 'brazo';
   if (/(tríceps|overhead|barra)/.test(n)) return 'brazo';
   if (/(core|abs|plancha|rueda|paloff|woodchopper|elevación piernas)/.test(n)) return 'core';
-  return 'otros';
-};
-
-// Mapeo simple de implemento desde el nombre
-const IMPLEMENT_FROM_NAME = (name='')=>{
-  const n = String(name).toLowerCase();
-  if (/(mancuerna|dumbbell)/.test(n)) return 'mancuerna';
-  if (/(barra|barbell)/.test(n)) return 'barra';
-  if (/(polea|cable)/.test(n)) return 'polea';
-  if (/(máquina|maquina|machine)/.test(n)) return 'maquina';
   return 'otros';
 };
 
@@ -148,8 +97,8 @@ const TABS = [
   { id: "settings", label: "Ajustes", icon: <SettingsIcon size={18} /> },
 ];
 
-const HistoryTab = React.lazy(() => import("./HistoryTab"));
-const SettingsTab = React.lazy(() => import("./SettingsTab"));
+const HistoryTab = React.lazy(() => import("./features/history/HistoryTabContainer.jsx"));
+const SettingsTab = React.lazy(() => import("./features/settings/SettingsTabContainer.jsx"));
 
 // ---------- Main App ----------
 export default function App() {
@@ -176,10 +125,6 @@ export default function App() {
   });
   const [syncStatus, setSyncStatus] = useState({ phase: "idle", lastSyncedAt: null, error: null });
   const [tab, setTab] = useState("today");
-  const [activeSession, setActiveSession] = useState(null); // {id,type,dateISO,routineKey,sets:[],startedAt,kcal?}
-  const [restSec, setRestSec] = useState(0);
-  const restDeadlineRef = useRef(null);
-  const rafRef = useRef(null);
   const [prFlash, setPrFlash] = useState("");
   const [confirmFlash, setConfirmFlash] = useState(null); // { message, onConfirm }
   const [dateStr] = useState(() => new Date().toLocaleDateString());
@@ -245,20 +190,22 @@ export default function App() {
   }, [data.userRoutinesIndex, data.customExercisesById, data.customRoutineNames]);
   const sessions = data.sessions;
 
-  const loop = () => {
-    if (!restDeadlineRef.current) { rafRef.current = null; return; }
-    const msLeft = restDeadlineRef.current - performance.now();
-    const secLeft = Math.max(0, Math.ceil(msLeft / 1000));
-    setRestSec(secLeft);
-    if (secLeft === 0) {
-      if (data.settings.sound) beep();
-      if (data.settings.vibration && navigator.vibrate) navigator.vibrate(80);
+  const { activeSession, setActiveSession, startStrength, finishStrength } = useActiveSession({
+    onFinish: (session) => setData((d) => ({ ...d, sessions: [session, ...d.sessions] })),
+  });
+
+  const { restSec, startRest, stopRest } = useWorkoutTimer({
+    soundEnabled: data.settings.sound,
+    vibrationEnabled: data.settings.vibration,
+    onDone: ({ soundEnabled, vibrationEnabled }) => {
+      if (soundEnabled) beep();
+      if (vibrationEnabled && navigator.vibrate) navigator.vibrate(80);
       try {
         if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
           const ensure = async () => {
             if (Notification.permission === 'default') await Notification.requestPermission();
             if (Notification.permission === 'granted') {
-              navigator.serviceWorker?.ready.then(reg => {
+              navigator.serviceWorker?.ready.then((reg) => {
                 reg.showNotification('¡A la barra!', {
                   body: 'Descanso terminado',
                   icon: '/pwa-192x192.png',
@@ -267,38 +214,14 @@ export default function App() {
                 });
               });
             }
-          }; ensure();
+          };
+          ensure();
         }
-      } catch { /* noop */ }
-      restDeadlineRef.current = null;
-    }
-    rafRef.current = requestAnimationFrame(loop);
-  };
-  const startRest = (seconds) => {
-    const s = Math.max(0, Number(seconds || 0));
-    if (s <= 0) { restDeadlineRef.current = null; setRestSec(0); cancelAnimationFrame(rafRef.current); rafRef.current = null; return; }
-    restDeadlineRef.current = performance.now() + s * 1000;
-    if (!rafRef.current) rafRef.current = requestAnimationFrame(loop);
-  };
-  const stopRest = () => { restDeadlineRef.current = null; setRestSec(0); cancelAnimationFrame(rafRef.current); rafRef.current = null; };
-
-  const startStrength = (routineKey) => {
-    if (!routineKey) return;
-    setActiveSession({ id: uid(), type: "strength", dateISO: toISODate(), routineKey, sets: [], startedAt: Date.now() });
-  };
-
-  const finishStrength = async () => {
-    if (!activeSession) return;
-    const autoDur = Math.max(1, Math.floor((Date.now() - activeSession.startedAt) / 1000));
-    let inputDur = prompt("Tiempo total de la rutina (minutos). Deja vacío para usar automático", String(Math.round(autoDur / 60)));
-    let durationSec = autoDur;
-    if (inputDur && !Number.isNaN(parseFloat(inputDur))) durationSec = Math.max(60, Math.round(parseFloat(inputDur) * 60));
-    let kcalStr = prompt("Kcal quemadas (opcional)", "");
-    const kcal = kcalStr && !Number.isNaN(parseFloat(kcalStr)) ? Math.round(parseFloat(kcalStr)) : undefined;
-    const totalVol = activeSession.sets.reduce((acc, s) => acc + (s.mode === "time" ? 0 : s.weightKg * s.reps), 0);
-    setData((d) => ({ ...d, sessions: [{ ...activeSession, durationSec, totalVolume: totalVol, kcal }, ...d.sessions] }));
-    setActiveSession(null);
-  };
+      } catch {
+        // noop
+      }
+    },
+  });
 
   const flashPR = (msg) => {
     setPrFlash(msg);
@@ -443,7 +366,8 @@ export default function App() {
         </div>
 
         {tab === "today" && (
-          <TodayTab
+          <WorkoutTabContainer
+            TodayTabComponent={TodayTab}
             data={data}
             setData={setData}
             routines={routines}
@@ -463,7 +387,8 @@ export default function App() {
         )}
 
         {tab === "routines" && (
-          <RoutinesTab
+          <RoutinesTabContainer
+            RoutinesTabComponent={RoutinesTab}
             routines={routines}
             addRoutine={addRoutine}
             deleteRoutine={deleteRoutine}
@@ -646,10 +571,9 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
   };
 
   const registerExercise = (slotKey, idx) => {
-    if (!activeSession) return alert('Inicia la sesión primero');
     const st = perExerciseState[slotKey];
-    if (!st) return;
-    if (st.drop && st.sets.some(s => !s.checked)) return alert('Completa todas las series base antes del drop-set');
+    const validationError = validateSetRegistration({ state: st, activeSession });
+    if (validationError) return alert(validationError);
     const exIdUsed = st?.effectiveExId || (sessionOverridesBySlot[slotKey] || exIds[idx]);
     const ex = resolveExercise(exIdUsed, data.customExercisesById);
     const setsToPersist = [];
