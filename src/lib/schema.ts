@@ -1,5 +1,29 @@
 import { z } from 'zod';
 
+export const muscleGroupSchema = z.enum([
+  'pecho',
+  'espalda',
+  'pierna',
+  'hombro',
+  'brazo',
+  'core',
+  'otros',
+]);
+
+export const implementSchema = z.enum([
+  'maquina',
+  'barra',
+  'barra_z',
+  'mancuerna',
+  'polea',
+  'corporal',
+  'rueda_abs',
+  'paralelas',
+  'disco',
+  'banda',
+  'otros',
+]);
+
 // Settings
 export const settingsSchema = z.object({
   unit: z.enum(['kg', 'lb']),
@@ -77,6 +101,23 @@ export const profileByExerciseIdSchema = z.record(z.object({
   }).partial().optional(),
 }).passthrough());
 
+const customExerciseSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  mode: z.string(),
+  category: z.string().optional(),
+  muscles: z.array(z.string()).min(1),
+  muscleGroup: muscleGroupSchema,
+  implement: implementSchema,
+  fixed: z.object({
+    targetSets: z.number().finite().optional(),
+    targetRepsRange: z.string().optional(),
+    targetTimeSec: z.number().finite().optional(),
+    restSec: z.number().finite().optional(),
+  }).partial().optional(),
+  notes: z.string().optional(),
+}).passthrough();
+
 // User routines index
 export const userRoutinesIndexSchema = z.record(z.array(z.string()));
 
@@ -88,9 +129,8 @@ export const dataSchema = z.object({
   routines: routinesSchema.optional(),
   profileByExerciseId: profileByExerciseIdSchema,
   userRoutinesIndex: userRoutinesIndexSchema.optional(),
-  customExercisesById: z.record(z.any()).optional(),
+  customExercisesById: z.record(customExerciseSchema).optional(),
   customRoutineNames: z.record(z.string()).optional(),
 }).passthrough();
 
 export default dataSchema;
-
