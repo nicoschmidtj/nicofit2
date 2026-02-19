@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { getTemplateRoutineName, suggestAlternativesByExerciseId, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
@@ -177,6 +177,16 @@ export default function App() {
       merged.userRoutinesIndex = buildDefaultUserRoutinesIndex();
       merged.customExercisesById = merged.customExercisesById || {};
       merged.version = Math.max(5, merged.version || 5);
+    }
+    if (!merged.onboarding) {
+      const hasHistory = Array.isArray(merged.sessions) && merged.sessions.length > 0;
+      const hasRoutines = Object.keys(merged.userRoutinesIndex || {}).some((k) => (merged.userRoutinesIndex?.[k] || []).length > 0);
+      merged.onboarding = {
+        completed: hasHistory || hasRoutines,
+        profileBase: null,
+        firstWeekChecklist: [],
+        firstWeekProgress: {},
+      };
     }
     storageSnapshotRef.current = { state: merged, metadata: loaded.metadata || {} };
     return merged;
@@ -430,7 +440,7 @@ export default function App() {
 
   const unit = data.settings.unit;
 
-  const finishOnboarding = (answers) => {
+  const finishOnboarding = useCallback((answers) => {
     const seed = buildOnboardingSeed(answers);
     setData((d) => ({
       ...d,
@@ -444,12 +454,12 @@ export default function App() {
       },
     }));
     trackOnboardingCompleted({ ...seed.profileBase, routineCount: Object.keys(seed.userRoutinesIndex || {}).length });
-  };
+  }, []);
 
-  const abandonOnboarding = (payload) => {
+  const abandonOnboarding = useCallback((payload) => {
     if (onboardingDone) return;
     trackOnboardingAbandoned(payload);
-  };
+  }, [onboardingDone]);
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900 text-zinc-900 dark:text-zinc-100">
@@ -498,7 +508,7 @@ export default function App() {
           />
         )}
 
-        {tab === "routines" && (
+        {onboardingDone && tab === "routines" && (
           <RoutinesTab
             routines={routines}
             addRoutine={addRoutine}
@@ -510,20 +520,20 @@ export default function App() {
           />
         )}
 
-        {tab === "history" && (
+        {onboardingDone && tab === "history" && (
           <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
             <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} />
           </Suspense>
         )}
 
-        {tab === "settings" && (
+        {onboardingDone && tab === "settings" && (
           <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
             <SettingsTab data={data} setData={setData} syncStatus={syncStatus} />
           </Suspense>
         )}
       </div>
 
-      <Nav tab={tab} setTab={setTab} />
+      {onboardingDone && <Nav tab={tab} setTab={setTab} />}
 
       {restSec > 0 && (
         <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-50">
