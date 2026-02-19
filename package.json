@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node src/lib/__tests__/repoAdapter.smoke.test.js && tsx src/lib/__tests__/migrations.test.ts && node src/lib/__tests__/storage.integration.test.js"
+    "test": "node src/lib/__tests__/repoAdapter.smoke.test.js && tsx src/lib/__tests__/migrations.test.ts && node src/lib/__tests__/storage.integration.test.js && tsx src/lib/__tests__/metrics.test.ts && node src/features/workout/services/workoutService.test.js && node src/features/workout/services/workflow.smoke.test.js"
   },
   "dependencies": {
     "lucide-react": "^0.539.0",
