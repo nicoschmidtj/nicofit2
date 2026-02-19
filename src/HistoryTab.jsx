@@ -88,7 +88,7 @@ function prsRecientes(sessions, routines, days = 30, routineKey = "all") {
   return res.sort((a, b) => new Date(b.dateISO) - new Date(a.dateISO)).slice(0, 5);
 }
 
-export default function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit, deleteSession, setTab, exercisesById }) {
+export default function HistoryTab({ sessions, routines, perExerciseHistory, weeklyVolume, unit, deleteSession, setTab, exercisesById, goalProgress, adherence, streak, missed }) {
   const [exId, setExId] = useState("");
   const [range, setRange] = useState("30");
   const [routineFilter, setRoutineFilter] = useState("all");
@@ -156,6 +156,19 @@ export default function HistoryTab({ sessions, routines, perExerciseHistory, wee
     return heatmapWeekGroup(filteredSessions, repo, { from, to, routineFilter: routineFilter === "all" ? undefined : routineFilter });
   }, [filteredSessions, days, routineFilter]);
   const prs = useMemo(() => prsRecientes(filteredSessions, routines, days, routineFilter), [filteredSessions, routines, days, routineFilter]);
+
+  const weeklyMetrics = [
+    { key: "streak", label: "Racha", value: `${streak || 0} días`, ok: (streak || 0) >= 2 },
+    { key: "adherence", label: "Adherencia", value: `${adherence || 0}%`, ok: (adherence || 0) >= 80 },
+    {
+      key: "goal",
+      label: "Meta semanal",
+      value: `${Math.round((goalProgress?.sessions?.progress || 0) * 100)}% sesiones`,
+      ok: Boolean(goalProgress?.sessions?.ok),
+    },
+    { key: "missed", label: "Sesiones pendientes", value: String(missed || 0), ok: (missed || 0) === 0 },
+  ];
+
   const topE1RM = useMemo(() => {
     const best = new Map();
     for (const s of filteredSessions) {
@@ -196,6 +209,17 @@ export default function HistoryTab({ sessions, routines, perExerciseHistory, wee
           <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Sesiones ({range}d)</div><div className="text-lg font-semibold">{totalSesiones}</div></Card>
           <Card className="p-3 text-center"><div className="text-xs text-zinc-500">Volumen (4 sem)</div><div className="text-lg font-semibold">{Math.round(volumen4Semanas)} kg·rep</div></Card>
           <Card className="p-3 text-center"><div className="text-xs text-zinc-500">PRs (4 sem)</div><div className="text-lg font-semibold">{prsUltimas4}</div></Card>
+        </div>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          {weeklyMetrics.map((metric) => (
+            <Card key={metric.key} className={`p-3 border ${metric.ok ? "border-emerald-300" : "border-amber-300"}`}>
+              <div className="flex items-center justify-between text-xs text-zinc-500">
+                <span>{metric.label}</span>
+                <span className={metric.ok ? "text-emerald-600" : "text-amber-600"}>{metric.ok ? "ok" : "alerta"}</span>
+              </div>
+              <div className="text-lg font-semibold">{metric.value}</div>
+            </Card>
+          ))}
         </div>
         {weekly8.length === 0 ? (
           <div className="h-40 flex items-center justify-center text-sm text-zinc-500">Sin datos aún</div>

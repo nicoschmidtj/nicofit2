@@ -162,3 +162,79 @@ export function buildPerExerciseHistory(sessions, exercisesById) {
   return map;
 }
 
+const MS_DAY = 24 * 3600 * 1000;
+
+export function streakDays(sessions, now = new Date()) {
+  const today = dayKey(now);
+  const trainedDays = new Set(
+    (sessions || [])
+      .filter((s) => s.type === 'strength')
+      .map((s) => dayKey(s.dateISO || s.at || now))
+  );
+  let cursor = new Date(`${today}T00:00:00.000Z`);
+  if (!trainedDays.has(dayKey(cursor))) {
+    cursor = new Date(cursor.getTime() - MS_DAY);
+  }
+  let streak = 0;
+  while (trainedDays.has(dayKey(cursor))) {
+    streak += 1;
+    cursor = new Date(cursor.getTime() - MS_DAY);
+  }
+  return streak;
+}
+
+const isoWeekBounds = (now = new Date()) => {
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+  const start = new Date(end);
+  const day = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - day);
+  start.setHours(0, 0, 0, 0);
+  return { start, end };
+};
+
+const weeklySnapshot = (sessions, now = new Date()) => {
+  const { start, end } = isoWeekBounds(now);
+  const weekSessions = (sessions || []).filter((s) => {
+    const at = new Date(s.dateISO || s.at || now);
+    return at >= start && at <= end;
+  });
+  const strengthSessions = weekSessions.filter((s) => s.type === 'strength').length;
+  const volume = weekSessions
+    .filter((s) => s.type === 'strength')
+    .reduce((acc, s) => acc + Number(s.totalVolume || 0), 0);
+  const cardioMinutes = weekSessions
+    .filter((s) => s.type === 'cardio')
+    .reduce((acc, s) => acc + Number(s.durationSec || 0), 0) / 60;
+  return { strengthSessions, volume, cardioMinutes };
+};
+
+export function weeklyGoalProgress(sessions, goals = {}, now = new Date()) {
+  const snapshot = weeklySnapshot(sessions, now);
+  const targetSessions = Math.max(0, Number(goals.sessions || 0));
+  const targetVolume = Math.max(0, Number(goals.volume || 0));
+  const targetCardio = Math.max(0, Number(goals.cardio || 0));
+
+  const build = (current, target) => {
+    if (!target) return { current, target, progress: 1, ok: true };
+    const progress = Math.min(1, current / target);
+    return { current, target, progress, ok: current >= target };
+  };
+
+  return {
+    sessions: build(snapshot.strengthSessions, targetSessions),
+    volume: build(Math.round(snapshot.volume), targetVolume),
+    cardio: build(Math.round(snapshot.cardioMinutes), targetCardio),
+  };
+}
+
+export function adherenceRate(sessions, goals = {}, now = new Date()) {
+  const progress = weeklyGoalProgress(sessions, goals, now);
+  const values = [progress.sessions.progress, progress.volume.progress, progress.cardio.progress];
+  return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100);
+}
+
+export function missedSessions(sessions, goals = {}, now = new Date()) {
+  const progress = weeklyGoalProgress(sessions, goals, now);
+  return Math.max(0, progress.sessions.target - progress.sessions.current);
+}
