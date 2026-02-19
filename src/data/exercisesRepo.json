@@ -1306,6 +1306,47 @@
       "fixed": { "targetSets": 3, "targetRepsRange": "10–15", "tempo": "controlado", "restSec": 45 }
     }
   },
+  "onboardingTemplates": {
+    "goalMap": {
+      "fitness_general": { "routineIds": ["rutina_express_1"] },
+      "muscle_gain": { "routineIds": ["rutina1", "rutina2"] },
+      "fat_loss": { "routineIds": ["rutina_express_1", "rutina2"] }
+    },
+    "experienceMap": {
+      "beginner": { "routineIds": ["rutina_express_1"] },
+      "intermediate": { "routineIds": ["rutina2"] },
+      "advanced": { "routineIds": ["rutina1", "rutina3"] }
+    },
+    "daysPerWeekMap": {
+      "2": { "routineIds": ["rutina_express_1"] },
+      "3": { "routineIds": ["rutina1"] },
+      "4": { "routineIds": ["rutina1", "rutina2"] },
+      "5": { "routineIds": ["rutina1", "rutina2", "rutina3"] }
+    },
+    "equipmentMap": {
+      "bodyweight": { "routineIds": ["rutina_express_1"] },
+      "dumbbells": { "routineIds": ["rutina2"] },
+      "full_gym": { "routineIds": ["rutina1", "rutina2"] }
+    },
+    "limitationsMap": {
+      "none": { "routineIds": [] },
+      "knee_sensitive": { "routineIds": ["rutina2"] },
+      "lower_back_sensitive": { "routineIds": ["rutina_express_1"] }
+    },
+    "routineNameMap": {
+      "rutina1": "Base hipertrofia",
+      "rutina2": "Full body adaptable",
+      "rutina3": "Volumen avanzado",
+      "rutina_express_1": "Express activación"
+    },
+    "firstWeekChecklist": [
+      { "id": "session1", "label": "Completa tu primera sesión" },
+      { "id": "hydration", "label": "Prepara tu botella y objetivo de hidratación" },
+      { "id": "warmup", "label": "Haz 5-10 min de calentamiento antes de entrenar" },
+      { "id": "log_sets", "label": "Registra todas las series de 2 entrenamientos" },
+      { "id": "review", "label": "Revisa progreso al final de la semana" }
+    ]
+  },
   "historyById": {},
   "routinesIndex": {
     "rutina1": ["belt-squat-cuadriceps","belt-squat-gluteos","peso-muerto-sumo","press-banca-barra","low-seat-row-horizontal","vuelo-lateral-mancuernas","elevacion-frontal-mancuernas","curl-martillo-banco-60-drop","curl-concentrado-silla-drop","patada-triceps-una-mano","plancha-frontal","rueda-abs"],

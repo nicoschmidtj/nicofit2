@@ -3,11 +3,12 @@ import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, 
 import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { getTemplateRoutineName, suggestAlternativesByExerciseId, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
 import { resolveExercise } from "./lib/exerciseResolver.js";
-import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
+import { buildDefaultUserRoutinesIndex, buildOnboardingSeed } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
 import { Card, Button, IconButton, Input, Label } from "./ui.jsx";
-import { buildPerExerciseHistory } from "./lib/analytics.js";
+import { buildPerExerciseHistory, trackOnboardingAbandoned, trackOnboardingCompleted } from "./lib/analytics.js";
 import { appStorage } from "./lib/storage/index.js";
+import OnboardingWizard from "./features/onboarding/OnboardingWizard.jsx";
 
 const repo = loadRepo();
 // =====================================
@@ -111,6 +112,12 @@ const DEFAULT_DATA = {
   userRoutinesIndex: {},
   customExercisesById: {},
   customRoutineNames: {},
+  onboarding: {
+    completed: false,
+    profileBase: null,
+    firstWeekChecklist: [],
+    firstWeekProgress: {},
+  },
 };
 
 // ---------- Beep ----------
@@ -176,6 +183,10 @@ export default function App() {
   });
   const [syncStatus, setSyncStatus] = useState({ phase: "idle", lastSyncedAt: null, error: null });
   const [tab, setTab] = useState("today");
+  const onboardingDone = !!data.onboarding?.completed;
+  useEffect(() => {
+    if (!onboardingDone && tab !== "today") setTab("today");
+  }, [onboardingDone, tab]);
   const [activeSession, setActiveSession] = useState(null); // {id,type,dateISO,routineKey,sets:[],startedAt,kcal?}
   const [restSec, setRestSec] = useState(0);
   const restDeadlineRef = useRef(null);
@@ -419,6 +430,27 @@ export default function App() {
 
   const unit = data.settings.unit;
 
+  const finishOnboarding = (answers) => {
+    const seed = buildOnboardingSeed(answers);
+    setData((d) => ({
+      ...d,
+      userRoutinesIndex: { ...seed.userRoutinesIndex },
+      customRoutineNames: { ...seed.customRoutineNames },
+      onboarding: {
+        completed: true,
+        profileBase: seed.profileBase,
+        firstWeekChecklist: seed.firstWeekChecklist,
+        firstWeekProgress: {},
+      },
+    }));
+    trackOnboardingCompleted({ ...seed.profileBase, routineCount: Object.keys(seed.userRoutinesIndex || {}).length });
+  };
+
+  const abandonOnboarding = (payload) => {
+    if (onboardingDone) return;
+    trackOnboardingAbandoned(payload);
+  };
+
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900 text-zinc-900 dark:text-zinc-100">
       <div className="max-w-md mx-auto pb-32 px-4 pt-6">
@@ -442,7 +474,11 @@ export default function App() {
           )}
         </div>
 
-        {tab === "today" && (
+        {!onboardingDone && (
+          <OnboardingWizard onComplete={finishOnboarding} onAbandon={abandonOnboarding} />
+        )}
+
+        {onboardingDone && tab === "today" && (
           <TodayTab
             data={data}
             setData={setData}
@@ -574,6 +610,8 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
   const [sessionOverridesBySlot, setSessionOverridesBySlot] = useState({});
   const [openTimerMenu, setOpenTimerMenu] = useState(false);
   const [quickAdd, setQuickAdd] = useState({ name: "", sets: "1", reps: "", weight: "" });
+  const firstWeekChecklist = data.onboarding?.firstWeekChecklist || [];
+  const firstWeekProgress = data.onboarding?.firstWeekProgress || {};
 
   const exIds = useMemo(() => data.userRoutinesIndex?.[routineKey] || [], [data.userRoutinesIndex, routineKey]);
 
@@ -729,6 +767,19 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     }
   };
 
+  const toggleFirstWeekItem = (itemId) => {
+    setData((d) => ({
+      ...d,
+      onboarding: {
+        ...(d.onboarding || {}),
+        firstWeekProgress: {
+          ...(d.onboarding?.firstWeekProgress || {}),
+          [itemId]: !(d.onboarding?.firstWeekProgress || {})[itemId],
+        },
+      },
+    }));
+  };
+
   const addAdhocExercise = () => {
     if (!activeSession) return alert("Inicia la sesión primero");
     const name = (quickAdd.name || "").trim();
@@ -797,6 +848,29 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
           </div>
         </div>
       </div>
+
+      {firstWeekChecklist.length > 0 && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold">Checklist primera semana</h3>
+            <span className="text-xs text-zinc-500">
+              {Object.values(firstWeekProgress).filter(Boolean).length}/{firstWeekChecklist.length}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {firstWeekChecklist.map((item) => (
+              <label key={item.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={!!firstWeekProgress[item.id]}
+                  onChange={() => toggleFirstWeekItem(item.id)}
+                />
+                <span>{item.label}</span>
+              </label>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card className="p-4 mt-1">
           <div className="mb-2">

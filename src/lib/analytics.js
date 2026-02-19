@@ -162,3 +162,29 @@ export function buildPerExerciseHistory(sessions, exercisesById) {
   return map;
 }
 
+
+const ANALYTICS_KEY = 'nicofit.analytics.events';
+
+export function trackEvent(name, payload = {}) {
+  const evt = {
+    name,
+    payload,
+    ts: new Date().toISOString(),
+  };
+  try {
+    const current = JSON.parse(localStorage.getItem(ANALYTICS_KEY) || '[]');
+    current.push(evt);
+    localStorage.setItem(ANALYTICS_KEY, JSON.stringify(current.slice(-200)));
+  } catch {
+    // noop: analytics best-effort
+  }
+  return evt;
+}
+
+export function trackOnboardingCompleted(payload = {}) {
+  return trackEvent('onboarding_completed', payload);
+}
+
+export function trackOnboardingAbandoned(payload = {}) {
+  return trackEvent('onboarding_abandoned', payload);
+}
