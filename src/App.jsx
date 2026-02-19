@@ -1,7 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Dumbbell, Timer as TimerIcon, History, Settings as SettingsIcon, Play, Square, Plus, Trash2, Edit3, ChevronRight, ChevronLeft, BarChart3, Flame, Repeat2, Check, Award, Clock } from "lucide-react";
 import { BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { getTemplateRoutineName, suggestAlternativesByExerciseId, loadRepo, findAlternatives } from "./lib/repoAdapter.js";
+import { e1RM, fmtTime, toDisplayWeight, fromDisplayToKg, todayISO } from "./lib/metrics.ts";
+import { useWorkoutTimer } from "./hooks/useWorkoutTimer.js";
+import { useActiveSession } from "./hooks/useActiveSession.js";
+import WorkoutContainer from "./features/workout/WorkoutContainer.jsx";
+import HistoryTab from "./features/history/HistoryContainer.jsx";
+import SettingsTab from "./features/settings/SettingsContainer.jsx";
 import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
@@ -25,17 +31,6 @@ const repo = loadRepo();
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 // clamp eliminado si no se usa
-const fmtTime = (sec) => {
-  const s = Math.max(0, Math.floor(sec));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${r.toString().padStart(2, "0")}`;
-};
-const toISODate = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString();
-const todayISO = () => toISODate().slice(0, 10);
-const epley1RM = (w, reps) => (w > 0 && reps > 0 ? Math.round(w * (1 + reps / 30)) : 0);
-const kgOrLb = (val, unit) => (unit === "lb" ? Math.round(val * 2.20462 * 10) / 10 : Math.round(val));
-const fromDisplayToKg = (val, unit) => (unit === "lb" ? Math.round((val / 2.20462) * 10) / 10 : val);
 const rpeToRir = (rpe) => {
   const x = Math.round(parseFloat(rpe || 0));
   if (x >= 10) return 0;
@@ -106,8 +101,6 @@ const TABS = [
   { id: "settings", label: "Ajustes", icon: <SettingsIcon size={18} /> },
 ];
 
-const HistoryTab = React.lazy(() => import("./HistoryTab"));
-const SettingsTab = React.lazy(() => import("./SettingsTab"));
 
 // ---------- Main App ----------
 export default function App() {
@@ -142,11 +135,7 @@ export default function App() {
   });
   const [syncStatus, setSyncStatus] = useState({ phase: "idle", lastSyncedAt: null, error: null });
   const [tab, setTab] = useState("today");
-  const [activeSession, setActiveSession] = useState(null); // {id,type,dateISO,routineKey,sets:[],startedAt,kcal?}
-  const [restSec, setRestSec] = useState(0);
-  const restDeadlineRef = useRef(null);
-  const rafRef = useRef(null);
-  const [prFlash, setPrFlash] = useState("");
+  const { activeSession, setActiveSession, startStrength, finishStrength, lastActionRef, prFlash, setPrFlash, undoLast } = useActiveSession({ setData });
   const [confirmFlash, setConfirmFlash] = useState(null); // { message, onConfirm }
   const [dateStr] = useState(() => new Date().toLocaleDateString());
   const [weeklyPlanSummary, setWeeklyPlanSummary] = useState(() => ({
@@ -154,8 +143,32 @@ export default function App() {
     daysPerWeek: data.settings?.onboardingDaysPerWeek || Object.keys(data.userRoutinesIndex || {}).length,
     routines: Object.keys(data.userRoutinesIndex || {}).length,
   }));
-  const lastActionRef = useRef({ exId: null, added: 0, prevCompleted: false });
   const beep = useBeep();
+  const { restSec, startRest, stopRest } = useWorkoutTimer({
+    soundEnabled: data.settings.sound,
+    vibrationEnabled: data.settings.vibration,
+    onTimerDone: () => {
+      beep();
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission !== "denied") {
+          const ensure = async () => {
+            if (Notification.permission === "default") await Notification.requestPermission();
+            if (Notification.permission === "granted") {
+              navigator.serviceWorker?.ready.then((reg) => {
+                reg.showNotification("¡A la barra!", {
+                  body: "Descanso terminado",
+                  icon: "/pwa-192x192.png",
+                  badge: "/pwa-192x192.png",
+                  tag: "rest-timer",
+                });
+              });
+            }
+          };
+          ensure();
+        }
+      } catch { /* noop */ }
+    },
+  });
 
   useEffect(() => appStorage.subscribeSyncStatus(setSyncStatus), []);
   useEffect(() => {
@@ -216,73 +229,12 @@ export default function App() {
   }, [data.userRoutinesIndex, data.customExercisesById, data.customRoutineNames]);
   const sessions = data.sessions;
 
-  const loop = () => {
-    if (!restDeadlineRef.current) { rafRef.current = null; return; }
-    const msLeft = restDeadlineRef.current - performance.now();
-    const secLeft = Math.max(0, Math.ceil(msLeft / 1000));
-    setRestSec(secLeft);
-    if (secLeft === 0) {
-      if (data.settings.sound) beep();
-      if (data.settings.vibration && navigator.vibrate) navigator.vibrate(80);
-      try {
-        if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
-          const ensure = async () => {
-            if (Notification.permission === 'default') await Notification.requestPermission();
-            if (Notification.permission === 'granted') {
-              navigator.serviceWorker?.ready.then(reg => {
-                reg.showNotification('¡A la barra!', {
-                  body: 'Descanso terminado',
-                  icon: '/pwa-192x192.png',
-                  badge: '/pwa-192x192.png',
-                  tag: 'rest-timer',
-                });
-              });
-            }
-          }; ensure();
-        }
-      } catch { /* noop */ }
-      restDeadlineRef.current = null;
-    }
-    rafRef.current = requestAnimationFrame(loop);
-  };
-  const startRest = (seconds) => {
-    const s = Math.max(0, Number(seconds || 0));
-    if (s <= 0) { restDeadlineRef.current = null; setRestSec(0); cancelAnimationFrame(rafRef.current); rafRef.current = null; return; }
-    restDeadlineRef.current = performance.now() + s * 1000;
-    if (!rafRef.current) rafRef.current = requestAnimationFrame(loop);
-  };
-  const stopRest = () => { restDeadlineRef.current = null; setRestSec(0); cancelAnimationFrame(rafRef.current); rafRef.current = null; };
-
-  const startStrength = (routineKey) => {
-    if (!routineKey) return;
-    setActiveSession({ id: uid(), type: "strength", dateISO: toISODate(), routineKey, sets: [], startedAt: Date.now() });
-  };
-
-  const finishStrength = async () => {
-    if (!activeSession) return;
-    const autoDur = Math.max(1, Math.floor((Date.now() - activeSession.startedAt) / 1000));
-    let inputDur = prompt("Tiempo total de la rutina (minutos). Deja vacío para usar automático", String(Math.round(autoDur / 60)));
-    let durationSec = autoDur;
-    if (inputDur && !Number.isNaN(parseFloat(inputDur))) durationSec = Math.max(60, Math.round(parseFloat(inputDur) * 60));
-    let kcalStr = prompt("Kcal quemadas (opcional)", "");
-    const kcal = kcalStr && !Number.isNaN(parseFloat(kcalStr)) ? Math.round(parseFloat(kcalStr)) : undefined;
-    const totalVol = activeSession.sets.reduce((acc, s) => acc + (s.mode === "time" ? 0 : s.weightKg * s.reps), 0);
-    setData((d) => ({ ...d, sessions: [{ ...activeSession, durationSec, totalVolume: totalVol, kcal }, ...d.sessions] }));
-    setActiveSession(null);
-  };
 
   const flashPR = (msg) => {
     setPrFlash(msg);
     if (data.settings.sound) beep();
     if (navigator.vibrate) navigator.vibrate(50);
     setTimeout(() => setPrFlash(""), 1000);
-  };
-
-  const undoLast = () => {
-    setActiveSession(s => s ? ({ ...s, sets: s.sets.slice(0, - (lastActionRef.current?.added || 0)) }) : s);
-    lastActionRef.current.undo?.();
-    lastActionRef.current = { exId: null, added: 0, prevCompleted: false, undo: null };
-    setPrFlash("");
   };
 
   const deleteSession = (id) => setData((d) => ({ ...d, sessions: d.sessions.filter((s) => s.id !== id) }));
@@ -474,50 +426,48 @@ export default function App() {
           )}
         </div>
 
-        {tab === "today" && (
-          <TodayTab
-            data={data}
-            setData={setData}
-            routines={routines}
-            activeSession={activeSession}
-            startStrength={startStrength}
-            finishStrength={finishStrength}
-            setActiveSession={setActiveSession}
-            flashPR={flashPR}
-            restSec={restSec}
-            startRest={startRest}
-            unit={unit}
-            setTab={setTab}
-            weeklyVolume={weeklyVolume}
-            lastActionRef={lastActionRef}
-            setPrFlash={setPrFlash}
-            weeklyPlanSummary={weeklyPlanSummary}
-            weeklyGuidance={weeklyGuidance}
-          />
-        )}
-
-        {tab === "routines" && (
-          <RoutinesTab
-            routines={routines}
-            addRoutine={addRoutine}
-            deleteRoutine={deleteRoutine}
-            renameRoutine={renameRoutine}
-            addExercise={addExercise}
-            deleteExercise={deleteExercise}
-            setData={setData}
-          />
-        )}
+        <WorkoutContainer
+          tab={tab}
+          renderToday={() => (
+            <TodayTab
+              data={data}
+              setData={setData}
+              routines={routines}
+              activeSession={activeSession}
+              startStrength={startStrength}
+              finishStrength={finishStrength}
+              setActiveSession={setActiveSession}
+              flashPR={flashPR}
+              restSec={restSec}
+              startRest={startRest}
+              unit={unit}
+              setTab={setTab}
+              weeklyVolume={weeklyVolume}
+              lastActionRef={lastActionRef}
+              setPrFlash={setPrFlash}
+              weeklyPlanSummary={weeklyPlanSummary}
+              weeklyGuidance={weeklyGuidance}
+            />
+          )}
+          renderRoutines={() => (
+            <RoutinesTab
+              routines={routines}
+              addRoutine={addRoutine}
+              deleteRoutine={deleteRoutine}
+              renameRoutine={renameRoutine}
+              addExercise={addExercise}
+              deleteExercise={deleteExercise}
+              setData={setData}
+            />
+          )}
+        />
 
         {tab === "history" && (
-          <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
-            <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} goalProgress={goalProgress} adherence={adherence} streak={streak} missed={missed} />
-          </Suspense>
+          <HistoryTab sessions={sessions} routines={routines} perExerciseHistory={perExerciseHistory} weeklyVolume={weeklyVolume} unit={unit} deleteSession={deleteSession} setTab={setTab} exercisesById={exercisesById} goalProgress={goalProgress} adherence={adherence} streak={streak} missed={missed} />
         )}
 
         {tab === "settings" && (
-          <Suspense fallback={<div className="p-4 text-sm">Cargando…</div>}>
-            <SettingsTab data={data} setData={setData} syncStatus={syncStatus} />
-          </Suspense>
+          <SettingsTab data={data} setData={setData} syncStatus={syncStatus} />
         )}
       </div>
 
@@ -730,7 +680,7 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     let raised = false;
     for (const n of setsToPersist) {
       if (n.mode !== 'time') {
-        const e1 = epley1RM(n.weightKg, n.reps);
+        const e1 = e1RM(n.weightKg, n.reps);
         if (e1 > bestE1) { raised = true; break; }
       }
     }
@@ -905,12 +855,12 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
               let explanation = "";
               if (prof?.next) {
                 suggestion = ex.mode === 'reps'
-                  ? `${kgOrLb(prof.next.weightKg || 0, unit)} ${unit} × ${prof.next.reps}`
+                  ? `${toDisplayWeight(prof.next.weightKg || 0, unit)} ${unit} × ${prof.next.reps}`
                   : `${prof.next.reps}s`;
                 explanation = prof.next.explanation || "";
               } else if (prof?.last) {
                 suggestion = ex.mode === 'reps'
-                  ? `${kgOrLb(prof.last.weightKg || 0, unit)} ${unit} × ${prof.last.reps}`
+                  ? `${toDisplayWeight(prof.last.weightKg || 0, unit)} ${unit} × ${prof.last.reps}`
                   : `${prof.last.reps}s`;
               }
               const setupParts = [];
@@ -1092,12 +1042,12 @@ function bestE1RMForExercise(activeSession, sessions, exerciseId) {
   let best = 0;
   for (const s of sessions.filter((x) => x.type === "strength")) {
     for (const st of s.sets || []) {
-      if (st.exerciseId === exerciseId && st.mode !== "time") best = Math.max(best, epley1RM(st.weightKg, st.reps));
+      if (st.exerciseId === exerciseId && st.mode !== "time") best = Math.max(best, e1RM(st.weightKg, st.reps));
     }
   }
   if (activeSession) {
     for (const st of activeSession.sets || []) {
-      if (st.exerciseId === exerciseId && st.mode !== "time") best = Math.max(best, epley1RM(st.weightKg, st.reps));
+      if (st.exerciseId === exerciseId && st.mode !== "time") best = Math.max(best, e1RM(st.weightKg, st.reps));
     }
   }
   return best;
@@ -1274,7 +1224,7 @@ function computeWeeklyVolume(sessions) {
 // ---------- Dev self-tests (console) ----------
 (function runDevTests(){
   try {
-    console.assert(epley1RM(100, 1) === 100 + Math.round(100 * (1/30)), "epley1RM trivial");
+    console.assert(e1RM(100, 1) === 100 + Math.round(100 * (1/30)), "e1RM trivial");
     console.assert(rpeToRir(10) === 0 && rpeToRir(9) === 1 && rpeToRir(8) === 2 && rpeToRir(7) === 3, "rpe→rir mapping");
     console.assert(weekNumber(new Date("2024-01-01")) >= 1, "week number");
     const wkEmpty = computeWeeklyVolume([]);
