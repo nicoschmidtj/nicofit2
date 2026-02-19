@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Download, Upload } from "lucide-react";
-import { migrate } from "./lib/migrations.ts";
+import { migrate } from "./lib/migrateState.js";
 import { dataSchema } from "./lib/schema.ts";
 import { Card, Button, Input, Label } from "./ui.jsx";
 
@@ -8,7 +8,7 @@ const todayISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const epley1RM = (w, reps) => (w > 0 && reps > 0 ? Math.round(w * (1 + reps / 30)) : 0);
 
-export default function SettingsTab({ data, setData }) {
+export default function SettingsTab({ data, setData, syncStatus }) {
   const [fileErr, setFileErr] = useState("");
   const [calc, setCalc] = useState({ weight: "", reps: "", percent: "85" });
   const [showPolicy, setShowPolicy] = useState(false);
@@ -150,17 +150,18 @@ export default function SettingsTab({ data, setData }) {
       </Card>
 
       <Card className="p-4">
-        <h2 className="text-lg font-semibold mb-2">Datos</h2>
+        <h2 className="text-lg font-semibold mb-2">Datos y backup</h2>
         <div className="flex items-center gap-2">
-          <Button onClick={onExport} className="text-sm"><Download size={16} className="inline mr-1" /> Exportar</Button>
+          <Button onClick={onExport} className="text-sm"><Download size={16} className="inline mr-1" /> Exportar backup</Button>
           <label className="px-4 py-2 rounded-2xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 cursor-pointer text-sm">
-            <Upload size={16} className="inline mr-1" /> Importar
+            <Upload size={16} className="inline mr-1" /> Importar backup
             <input type="file" accept="application/json" onChange={onImport} className="hidden" />
           </label>
           <Button className="text-sm" onClick={() => setShowPolicy(true)}>Política de datos</Button>
         </div>
         {fileErr && <div className="text-sm text-rose-500 mt-2">{fileErr}</div>}
-        <p className="text-xs text-zinc-500 mt-2">Si la descarga está bloqueada por el entorno, copio el JSON al portapapeles o lo abro en una pestaña nueva.</p>
+        <p className="text-xs text-zinc-500 mt-2">La sincronización en la nube es primaria. Exportar/Importar queda como respaldo manual.</p>
+        <p className="text-xs text-zinc-500 mt-1">Última sincronización: {syncStatus?.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : "Sin sincronizar"} · Estado: {syncStatus?.phase || "idle"}</p>
       </Card>
 
       <Card className="p-4">
@@ -177,9 +178,9 @@ export default function SettingsTab({ data, setData }) {
           <Card className="max-w-sm w-[90%] p-4">
             <h3 className="text-lg font-semibold mb-2">Política de datos</h3>
             <p className="text-sm text-zinc-600 dark:text-zinc-300">
-              Los datos se guardan localmente en tu dispositivo (LocalStorage). Puedes exportarlos/importarlos.
+              Los datos se guardan localmente como caché offline y también se sincronizan por usuario con backend.
+              Puedes exportarlos/importarlos como backup secundario.
               Si activas PWA/notificaciones, se instalan archivos en caché para funcionar offline.
-              No se envían datos a servidores externos.
             </p>
             <div className="mt-3 flex justify-end">
               <Button className="text-sm" onClick={() => setShowPolicy(false)}>Cerrar</Button>
