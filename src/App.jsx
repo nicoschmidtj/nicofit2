@@ -6,7 +6,8 @@ import { resolveExercise } from "./lib/exerciseResolver.js";
 import { buildDefaultUserRoutinesIndex } from "./lib/defaultUserRoutines.js";
 import { roundToNearest, getInitialWeightForExercise, getLastUsedSetForExercise } from "./lib/utils.js";
 import { Card, Button, IconButton, Input, Label } from "./ui.jsx";
-import { buildPerExerciseHistory } from "./lib/analytics.js";
+import { buildPerExerciseHistory as buildAnalyticsPerExerciseHistory } from "./lib/analytics.js";
+import { buildPerExerciseHistory, calcNext, PROGRESSION_PROFILES } from "./lib/progression.ts";
 import { appStorage } from "./lib/storage/index.js";
 
 const repo = loadRepo();
@@ -39,37 +40,6 @@ const rpeToRir = (rpe) => {
   if (x >= 9) return 1;
   if (x >= 8) return 2;
   return 3;
-};
-
-// Auto-progresión helpers
-const LOAD_STEP_KG = 2.5;
-const parseRange = (ex) => {
-  if (ex.mode === 'time') return [ex.targetTimeSec || 0, ex.targetTimeSec || 0];
-  const str = ex.targetRepsRange || `${ex.targetReps || 0}`;
-  const nums = String(str).match(/\d+/g)?.map(n => parseInt(n,10)) || [];
-  if (nums.length === 0) return [ex.targetReps || 0, ex.targetReps || 0];
-  if (nums.length === 1) return [nums[0], nums[0]];
-  return [nums[0], nums[1]];
-};
-const calcNext = ({ last, ex, profile }) => {
-  if (!last || ex.mode === 'time') return {};
-  const [minReps, maxReps] = parseRange(ex);
-  const minW = profile?.minWeightKg || 0;
-  let weightKg = last.weightKg;
-  let reps = last.reps;
-  const rir = last.rir ?? rpeToRir(last.rpe || 8);
-  if (rir >= 3) {
-    weightKg = Math.max(minW, last.weightKg + LOAD_STEP_KG);
-  } else if (rir === 2) {
-    if (reps < maxReps) reps = reps + 1;
-  } else if (rir <= 0 || reps < minReps) {
-    if (last.weightKg - LOAD_STEP_KG >= minW) {
-      weightKg = Math.max(minW, last.weightKg - LOAD_STEP_KG);
-    } else {
-      reps = Math.max(1, reps - 1);
-    }
-  }
-  return { weightKg, reps };
 };
 
 // Mapeo de grupos musculares desde el nombre del ejercicio
@@ -413,7 +383,7 @@ export default function App() {
     return out;
   }, [routines]);
 
-  const perExerciseHistory = useMemo(() => buildPerExerciseHistory(sessions, exercisesById), [sessions, exercisesById]);
+  const perExerciseHistory = useMemo(() => buildAnalyticsPerExerciseHistory(sessions, exercisesById), [sessions, exercisesById]);
 
   const weeklyVolume = useMemo(() => computeWeeklyVolume(sessions), [sessions]);
 
@@ -577,6 +547,11 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
 
   const exIds = useMemo(() => data.userRoutinesIndex?.[routineKey] || [], [data.userRoutinesIndex, routineKey]);
 
+  const getExerciseProfileType = (exerciseId) => {
+    const prof = data.profileByExerciseId?.[exerciseId] || {};
+    return prof?.byRoutine?.[routineKey]?.progressionProfile || prof.progressionProfile || 'hypertrophy';
+  };
+
   useEffect(() => {
     setPerExerciseState({});
     setSessionOverridesBySlot({});
@@ -700,9 +675,31 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
     const lastValid = [...setsToPersist].reverse().find(s => !s.drop);
     if (lastValid) {
       const prevProf = data.profileByExerciseId?.[exIdUsed] || {};
+      const profileType = getExerciseProfileType(exIdUsed);
+      const targetSets = ex?.fixed?.targetSets || ex?.targetSets || 3;
+      const currentSessionSnapshot = { ...(activeSession || {}), sets: [...(activeSession?.sets || []), ...setsToPersist] };
+      const history = buildPerExerciseHistory({ sessions: [...(data.sessions || []), currentSessionSnapshot], exerciseId: exIdUsed, targetSets });
       const last = { weightKg: lastValid.weightKg, reps: lastValid.reps, rir: lastValid.rir, dateISO: todayISO(), setup: prevProf.last?.setup };
-      const next = calcNext({ last, ex, profile: prevProf });
-      setData(d => ({ ...d, profileByExerciseId: { ...d.profileByExerciseId, [exIdUsed]: { ...prevProf, last, next } } }));
+      const next = calcNext({ last, ex, profile: prevProf, profileType, history });
+      setData(d => ({
+        ...d,
+        profileByExerciseId: {
+          ...d.profileByExerciseId,
+          [exIdUsed]: {
+            ...prevProf,
+            progressionProfile: profileType,
+            byRoutine: {
+              ...(prevProf.byRoutine || {}),
+              [routineKey]: {
+                ...(prevProf.byRoutine?.[routineKey] || {}),
+                progressionProfile: profileType,
+              },
+            },
+            last,
+            next,
+          },
+        },
+      }));
     }
     const prevMask = st.registeredMask;
     const prevDrop = st.dropRegistered;
@@ -826,11 +823,19 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
               const ex = resolveExercise(effectiveId, data.customExercisesById);
               const st = perExerciseState[slotKey] || { sets: [] };
               const prof = data.profileByExerciseId?.[effectiveId];
+              const selectedProfile = getExerciseProfileType(effectiveId);
+              const profileLabel = {
+                strength: 'Fuerza',
+                hypertrophy: 'Hipertrofia',
+                recomposition: 'Recomposición',
+              }[selectedProfile] || selectedProfile;
               let suggestion = "";
+              let explanation = "";
               if (prof?.next) {
                 suggestion = ex.mode === 'reps'
                   ? `${kgOrLb(prof.next.weightKg || 0, unit)} ${unit} × ${prof.next.reps}`
                   : `${prof.next.reps}s`;
+                explanation = prof.next.explanation || "";
               } else if (prof?.last) {
                 suggestion = ex.mode === 'reps'
                   ? `${kgOrLb(prof.last.weightKg || 0, unit)} ${unit} × ${prof.last.reps}`
@@ -844,10 +849,44 @@ function TodayTab({ data, setData, routines, activeSession, setActiveSession, st
               return (
                 <div key={`${slotKey}:${effectiveId}`} className={`rounded-2xl border ${st.completed ? "border-emerald-400" : "border-zinc-200 dark:border-zinc-800"} p-3`}>
                   <div className="mb-1">
-                    <div className="text-base font-semibold leading-tight">{idx + 1}. {ex.name}</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-base font-semibold leading-tight">{idx + 1}. {ex.name}</div>
+                      <select
+                        className="px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs"
+                        value={selectedProfile}
+                        onChange={(e) => {
+                          const nextProfile = e.target.value;
+                          setData((d) => {
+                            const current = d.profileByExerciseId?.[effectiveId] || {};
+                            return {
+                              ...d,
+                              profileByExerciseId: {
+                                ...(d.profileByExerciseId || {}),
+                                [effectiveId]: {
+                                  ...current,
+                                  progressionProfile: nextProfile,
+                                  byRoutine: {
+                                    ...(current.byRoutine || {}),
+                                    [routineKey]: {
+                                      ...(current.byRoutine?.[routineKey] || {}),
+                                      progressionProfile: nextProfile,
+                                    },
+                                  },
+                                },
+                              },
+                            };
+                          });
+                        }}
+                      >
+                        {Object.keys(PROGRESSION_PROFILES).map((key) => (
+                          <option key={key} value={key}>{key}</option>
+                        ))}
+                      </select>
+                    </div>
                     <div className="text-xs text-zinc-500">
                       {(ex.fixed?.targetSets || ex.targetSets)}×{ex.mode === "reps" ? (ex.fixed?.targetRepsRange || ex.targetRepsRange) : (ex.fixed?.targetRepsRange || `${ex.fixed?.targetTimeSec || ex.targetTimeSec}s`)}
-                      {suggestion ? ` · Sugerencia ${suggestion}` : ""}
+                      {suggestion ? ` · Sugerencia (${profileLabel}) ${suggestion}` : ""}
+                      {explanation ? ` · ${explanation}` : ""}
                       {ex.restSec ? ` · ${ex.restSec}s` : ""}
                       {` · Tempo: ${tempoSugerido(ex.category, ex.mode)}`}
                       {setupText}
